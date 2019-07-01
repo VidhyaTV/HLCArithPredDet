@@ -2,10 +2,12 @@ class ChangePoint
 {
     Clock cPointTimestamp;
     int endpointType;//+1 for left endpoint, -1 for right endpoint
-    ChangePoint(Clock cPtTimestamp, int ePoint)
+    int iValue;
+    ChangePoint(Clock cPtTimestamp, int ePoint, int value)
     {
         cPointTimestamp=cPtTimestamp;
         endpointType=ePoint;
+        iValue = value;
     }
     Clock getcPointTimestamp()
     {
@@ -15,6 +17,10 @@ class ChangePoint
     {
         return endpointType;
     }
+    int getiValue()
+    {
+        return iValue;
+    }
     void setcPointTimestamp(Clock cPtTimestamp)
     {
         cPointTimestamp=cPtTimestamp;
@@ -23,4 +29,5 @@ class ChangePoint
     {
         endpointType=ePoint;
     }
+    void setiValue(int value){iValue = value;}
 }

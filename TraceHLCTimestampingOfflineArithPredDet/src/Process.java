@@ -106,9 +106,9 @@ class Process
         }
         return newCand;
     }
-    void newChangePoint(Clock cPtTime, int endPtIdentifier)
+    void newChangePoint(Clock cPtTime, int endPtIdentifier, int value)
     {
-        ChangePoint newCPt= new ChangePoint(cPtTime, endPtIdentifier);
+        ChangePoint newCPt= new ChangePoint(cPtTime, endPtIdentifier, value);
         cPointQueue.add(newCPt);
         if(TraceHLCTimestampingOfflineArithPredDet.debugmode==2)
         {
@@ -117,7 +117,7 @@ class Process
             {
                 //System.out.println("Pushing Candidate");
                 BufferedWriter cptbw2= new BufferedWriter(new FileWriter("ChangePoints"+id+".txt", true));//true for append
-                cptbw2.append("<"+cPtTime.getClock()+", type: "+endPtIdentifier+">\n");
+                cptbw2.append("<"+cPtTime.getClock()+", type: "+endPtIdentifier+", value"+value+">\n");
                 cptbw2.close();
             }
             catch (Exception e)

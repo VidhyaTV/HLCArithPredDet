@@ -57,7 +57,7 @@ public class TraceHLCTimestampingOfflineArithPredDet {
 				System.exit(0);
 			}
 			*/
-            inpfilename="predicate_a0.010000_e100_l0.100000_d10_v1_run0.xml";
+            inpfilename="../../predicate_a0.010000_e100_l0.100000_d10_v1_run0.xml";
             //setting gamma to -1 here by providing -1 as the third input argument - will set it to epsilon below
             gamma = Integer.parseInt(args[2]);
             File inputFile = new File(inpfilename);
@@ -186,46 +186,52 @@ class UserHandler extends DefaultHandler
             String value = attributes.getValue("value");
             String old_value = attributes.getValue("old_value");
 
+
+            Process proc= mapofprocesses.get(proc_id);
+
+            //create separate version of clocks for the candidate
+            Clock nwclock1=new Clock();
+            Clock nwclock2=new Clock();
+            if(TraceHLCTimestampingOfflineArithPredDet.clockmode.equals("HLC"))
+            {
+                Vector<Integer> hlcvector1=new Vector<Integer>();
+                hlcvector1.add(0);
+                hlcvector1.add(0);
+                hlcvector1.add(0);
+                nwclock1=new HLC(hlcvector1);
+                //there is guarantee that the old clock should correspond to
+                //interval start because no event happens between intervals,
+                //the interval start is either end of a false interval or
+                //true interval (due to interval split due to communication),
+                //either way this value is recorded as old clock value when
+                //"endtime" of current interval got processed
+                nwclock1.setClock(proc.getProcOldClock().getClock());
+                Vector<Integer> hlcvector2=new Vector<Integer>();
+                hlcvector2.add(0);
+                hlcvector2.add(0);
+                hlcvector2.add(0);
+                nwclock2=new HLC(hlcvector2);
+                nwclock2.setClock(proc.getProcClock().getClock());
+                nwclock2.setClockPlusValue(TraceHLCTimestampingOfflineArithPredDet.gamma);
+            }
+            //this was used for an earlier implementation where intervals were
+            //reported as pairs of end-points and intervals during which the value of the local variable "x"
+            //at a process was true were also referred to as true-intervals were reported as "Candidates"
+            //add candidate to process queue
+            proc.newCandidateOccurance(nwclock1,nwclock2);
+            //add change-points to process queue
             if(value.equals("true"))
             {
-                Process proc= mapofprocesses.get(proc_id);
-
-                //create separate version of clocks for the candidate
-                Clock nwclock1=new Clock();
-                Clock nwclock2=new Clock();
-                if(TraceHLCTimestampingOfflineArithPredDet.clockmode.equals("HLC"))
-                {
-                    Vector<Integer> hlcvector1=new Vector<Integer>();
-                    hlcvector1.add(0);
-                    hlcvector1.add(0);
-                    hlcvector1.add(0);
-                    nwclock1=new HLC(hlcvector1);
-                    //there is guarantee that the old clock should correspond to 
-                    //interval start because no event happens between intervals, 
-                    //the interval start is either end of a false interval or 
-                    //true interval (due to interval split due to communication), 
-                    //either way this value is recorded as old clock value when 
-                    //"endtime" of current interval got processed
-                    nwclock1.setClock(proc.getProcOldClock().getClock());
-                    Vector<Integer> hlcvector2=new Vector<Integer>();
-                    hlcvector2.add(0);
-                    hlcvector2.add(0);
-                    hlcvector2.add(0);
-                    nwclock2=new HLC(hlcvector2);
-                    nwclock2.setClock(proc.getProcClock().getClock());
-                    nwclock2.setClockPlusValue(TraceHLCTimestampingOfflineArithPredDet.gamma);
-                }
-                //this was used for an earlier implementation where intervals were 
-                //reported as pairs of end-points and intervals during which the value of the local variable "x" 
-                //at a process was true were also referred to as true-intervals were reported as "Candidates"
-                //add candidate to process queue
-                proc.newCandidateOccurance(nwclock1,nwclock2);
-                //add change-points to process queue
-                proc.newChangePoint(nwclock1,1);
-                proc.newChangePoint(nwclock2,-1);
-
-                mapofprocesses.put(proc_id,proc);
+                proc.newChangePoint(nwclock1,1,1);
+                proc.newChangePoint(nwclock2,-1,1);
             }
+            /* //uncomment the else part when you have the implementation for processing arithmetic intervals ready
+            else{
+                proc.newChangePoint(nwclock1,1,0);
+                proc.newChangePoint(nwclock2,-1,0);
+            }
+             */
+            mapofprocesses.put(proc_id,proc);
         }
         else if (qName.equalsIgnoreCase("misc"))
         {
@@ -399,7 +405,7 @@ class UserHandler extends DefaultHandler
         temp.add(0);
         temp.add(0);
         //variable for finding and storing minimum changepoint
-        ChangePoint minCPt= new ChangePoint(new HLC(temp),0);
+        ChangePoint minCPt= new ChangePoint(new HLC(temp),0,-1);
         int minCPtProc=-1;	//process corresponding to the minimum changepoint	
         try {
             do //until minCPtProc=-1 at the end of the loop - there is no more unprocessed changepoint to process
