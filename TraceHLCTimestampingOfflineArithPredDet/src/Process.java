@@ -292,4 +292,74 @@ class Process
             }
         }
     }
+
+    Deque<ChangePoint> cleanUpChangePtQ(){
+        Deque<ChangePoint> cleansedQ = new ArrayDeque<ChangePoint>();
+        if (!cPointQueue.isEmpty())//if there is at least one unprocessed changepoint
+        {
+            Deque<ChangePoint> intermediateCPtsQ = new ArrayDeque<ChangePoint>();
+            ChangePoint currentLCPt = getCPtQueue().removeFirst(); //Lj
+            ChangePoint currentRCPt = getCPtQueue().removeFirst(); //Rj
+            if (cPointQueue.peek() == null) {//queue has changepoints of a single interval
+                cPointQueue.add(currentLCPt);
+                cPointQueue.add(currentRCPt);
+                return cPointQueue;
+            }
+            while (cPointQueue.peek() != null) {
+                ChangePoint nextLCPt = getCPtQueue().removeFirst(); //Li
+                ChangePoint nextRCPt = getCPtQueue().removeFirst(); //Ri
+                //no overlap
+                if (currentRCPt.getcPointTimestamp().lessThan(nextLCPt.getcPointTimestamp()) || currentRCPt.getcPointTimestamp().equalTo(nextLCPt.getcPointTimestamp())) {
+                    //clean up
+                    //put current interval
+                    cleansedQ.add(currentLCPt);
+                    cleansedQ.add(currentRCPt);
+                    while (intermediateCPtsQ.peek() != null) {//process any intermediate changepoints
+                        //change L's timestamp of every entry in intermediateCPtsQ to Rj's timestamp
+                        ChangePoint intermediateCPtL = intermediateCPtsQ.removeFirst(); //processing from last intermediate interval so that they can be added to the queue front in reverse order
+                        ChangePoint intermediateCPtR = intermediateCPtsQ.removeFirst();
+                        //currentCPt overlapped with entire intermediate interval drop it else modify its left end
+                        if (intermediateCPtR.getcPointTimestamp().lessThan(currentRCPt.getcPointTimestamp()) || intermediateCPtR.getcPointTimestamp().equalTo(currentRCPt.getcPointTimestamp())) {
+                            continue;//ignore any intermediate intervals with smaller value
+                        }
+                        //set L value to Rj value
+                        Clock currRClock = currentRCPt.getcPointTimestamp();
+                        Clock origLTime = intermediateCPtL.getcPointTimestamp();
+                        origLTime.setClock(currRClock.getClock());
+                        intermediateCPtL.setcPointTimestamp(origLTime);
+                        //put it back in the original queue
+                        //in the right order
+                        cleansedQ.add(intermediateCPtL);
+                        cleansedQ.add(intermediateCPtR);
+                    }
+                    currentLCPt = nextLCPt;
+                    currentRCPt = nextRCPt;
+                } else if (nextLCPt.getiValue() > currentLCPt.getiValue()) {//there is overlap and the successive overlapping interval has higher value
+                    //discard intermediateCPtsQ
+                    intermediateCPtsQ.clear();
+                    //set Rj's timestamp to Li's timestamp
+                    Clock nextLClock = nextLCPt.getcPointTimestamp();
+                    Clock origRTime = currentRCPt.getcPointTimestamp();
+                    origRTime.setClock(nextLClock.getClock());
+                    currentRCPt.setcPointTimestamp(origRTime);
+                    if (!currentRCPt.getcPointTimestamp().lessThan(currentLCPt.getcPointTimestamp())) {
+                        cleansedQ.add(currentLCPt);
+                        cleansedQ.add(currentRCPt);
+                    }
+                    currentLCPt = nextLCPt;
+                    currentRCPt = nextRCPt;
+                } else {//there is overlap and the successive overlapping interval has smaller value
+                    //set Li's timestamp to Rj's timestamp
+                    Clock currRClock = currentRCPt.getcPointTimestamp();
+                    Clock origLTime = nextLCPt.getcPointTimestamp();
+                    origLTime.setClock(currRClock.getClock());
+                    nextLCPt.setcPointTimestamp(origLTime); /**********should we check if the interval overlaps completely??****************/
+                    intermediateCPtsQ.add(nextLCPt);
+                    intermediateCPtsQ.add(nextRCPt);
+                    //currentLCPt and currentRCPt say the same
+                }
+            }//end of while(cPointQueue.peek() != null)
+        }//end of if(!cPointQueue.isEmpty())
+        return cleansedQ;
+    }
 }

@@ -394,6 +394,13 @@ class UserHandler extends DefaultHandler
                 currProc.printCPtQueueToFile(snapshot_cpt_file);
             }
         }
+
+        for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
+        {
+            Process currProc= mapofprocesses.get(i); //get the current state of the process
+            currProc.setCPtQueue(currProc.cleanUpChangePtQ());
+        }
+
         //create variable overlap_count
         int overlap_count= 0;
         int prevtokenend = 0;
@@ -453,6 +460,7 @@ class UserHandler extends DefaultHandler
                     }
                     ChangePoint currentCPt=chosenProccPtq.removeFirst();
                     /***********************Checking if interval extensions resulted in overlaps************/
+                    /*
                     //get the next changepoint in the queue to determine if there
                     //if there is an overlap between consecutive intervals due to Gamma extension
                     if (chosenProccPtq.peekFirst()!=null) {
@@ -488,6 +496,7 @@ class UserHandler extends DefaultHandler
                             }
                         }
                     }
+                    */
                     /**************************update overlap count accordingly**************************/
                     overlap_count=overlap_count+currentCPt.getEndPointType();
                     //remember the effect of clearing the candidate queue of the process
