@@ -378,12 +378,30 @@ class UserHandler extends DefaultHandler
             System.out.println("Zero processes in system.");
             System.exit(0);
         }
-        String nwfolder="";
-        BufferedWriter bwTemp =null,bw1=null,bw2=null,bw3=null;
-        /*****************print all candidates and changepoints of all the processes to see if change points are recorded correctly***************/
-        if (TraceHLCTimestampingOfflineArithPredDet.debugmode==2) {
+        String nwfolder=TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(0, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf('.')); //input file name without file extension
+        BufferedWriter bwTemp_bef =null,bw1_bef=null,bw2_bef=null,bw3_bef=null,bwTemp =null,bw1=null,bw2=null,bw3=null;
+        /*****************print all candidates and changepoints of all the processes before preprocessing***************/
+        if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
             //For debugging purposes
-            nwfolder=TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(0, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf('.')); //input file name without file extension
+            String snapshot_cand_file=nwfolder+"\\before_candidates"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_mode_"+TraceHLCTimestampingOfflineArithPredDet.mode+".txt";
+            String snapshot_cpt_file=nwfolder+"\\before_changepoints"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_mode"+TraceHLCTimestampingOfflineArithPredDet.mode+".txt";
+            for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
+            {
+                Process currProc= mapofprocesses.get(i); //get the current state of the process
+                //since same file is passed for all processes -delete before a run because it is set to open in append mode
+                currProc.printCandQueueToFile(snapshot_cand_file);
+                currProc.printCPtQueueToFile(snapshot_cpt_file);
+            }
+        }
+        for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
+        {
+            Process currProc= mapofprocesses.get(i); //get the current state of the process
+            currProc.setCPtQueue(currProc.cleanUpChangePtQ());
+        }
+
+        /*****************print all candidates and changepoints of all the processes to see if change points were processed correctly***************/
+        if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
+            //For debugging purposes
             String snapshot_cand_file=nwfolder+"\\candidates"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_mode_"+TraceHLCTimestampingOfflineArithPredDet.mode+".txt";
             String snapshot_cpt_file=nwfolder+"\\changepoints"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_mode"+TraceHLCTimestampingOfflineArithPredDet.mode+".txt";
             for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
@@ -394,13 +412,6 @@ class UserHandler extends DefaultHandler
                 currProc.printCPtQueueToFile(snapshot_cpt_file);
             }
         }
-
-        for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
-        {
-            Process currProc= mapofprocesses.get(i); //get the current state of the process
-            currProc.setCPtQueue(currProc.cleanUpChangePtQ());
-        }
-
         //create variable overlap_count
         int overlap_count= 0;
         int prevtokenend = 0;
@@ -459,44 +470,6 @@ class UserHandler extends DefaultHandler
                         System.exit(0);
                     }
                     ChangePoint currentCPt=chosenProccPtq.removeFirst();
-                    /***********************Checking if interval extensions resulted in overlaps************/
-                    /*
-                    //get the next changepoint in the queue to determine if there
-                    //if there is an overlap between consecutive intervals due to Gamma extension
-                    if (chosenProccPtq.peekFirst()!=null) {
-                        ChangePoint nextCPtatProc = chosenProccPtq.getFirst();//not removing
-                        //if the current changepoint time is larger than the next Change Point at the Process
-                        //Comparing only L values -- because Gamma was added to the L part of the timestamp
-                        int currentL= currentCPt.getcPointTimestamp().getClock().get(1);
-                        int nextL = nextCPtatProc.getcPointTimestamp().getClock().get(1);
-                        if (currentL> nextL)
-                        {
-                            //file to print to to test if overlap check is happening
-                            if (TraceHLCTimestampingOfflineArithPredDet.debugmode==3) {
-                                if(bwTemp== null) {
-                                    //********************************creating needed file and folders*******************************
-                                    nwfolder=TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(0, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf('.')); //input file name without file extension
-                                    String intervalOverlaps=nwfolder+"\\interval_overlaps.txt";
-                                    File ifilenameTemp = new File(intervalOverlaps);
-                                    ifilenameTemp.getParentFile().mkdirs(); //create all necessary parent directories
-                                    bwTemp= new BufferedWriter(new FileWriter(ifilenameTemp));//opening file in write mode so anything already existing will be cleared
-                                }
-                                bwTemp.write("Current l:"+currentL+", Next l:"+nextL);
-                                bwTemp.newLine();
-                            }
-                            currentL = nextL;
-                            Clock tempClock = currentCPt.getcPointTimestamp();
-                            Vector<Integer> newTime = currentCPt.getcPointTimestamp().getClock();
-                            newTime.set(1, currentL);//set L value to L value of the interval start of next interval
-                            tempClock.setClock(newTime);
-                            currentCPt.setcPointTimestamp(tempClock);
-                            if (TraceHLCTimestampingOfflineArithPredDet.debugmode==3) {
-                                bwTemp.write("After correction: Current l:"+currentCPt.getcPointTimestamp().getClock().get(1));
-                                bwTemp.newLine();
-                            }
-                        }
-                    }
-                    */
                     /**************************update overlap count accordingly**************************/
                     overlap_count=overlap_count+currentCPt.getEndPointType();
                     //remember the effect of clearing the candidate queue of the process

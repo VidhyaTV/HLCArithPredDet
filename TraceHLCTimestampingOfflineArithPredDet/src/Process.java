@@ -331,6 +331,8 @@ class Process
                         //in the right order
                         cleansedQ.add(intermediateCPtL);
                         cleansedQ.add(intermediateCPtR);
+                        // remember the right endpoint of the current intermediate interval to be used as left endpoint of the next intermediate interval if needed
+                        currentRCPt = intermediateCPtR;
                     }
                     currentLCPt = nextLCPt;
                     currentRCPt = nextRCPt;
@@ -353,7 +355,7 @@ class Process
                     Clock currRClock = currentRCPt.getcPointTimestamp();
                     Clock origLTime = nextLCPt.getcPointTimestamp();
                     origLTime.setClock(currRClock.getClock());
-                    nextLCPt.setcPointTimestamp(origLTime); /**********should we check if the interval overlaps completely??****************/
+                    nextLCPt.setcPointTimestamp(origLTime);
                     intermediateCPtsQ.add(nextLCPt);
                     intermediateCPtsQ.add(nextRCPt);
                     //currentLCPt and currentRCPt say the same
