@@ -2,64 +2,45 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
-
+import java.io.PrintWriter;
 import javax.xml.parsers.SAXParser;
 import javax.xml.parsers.SAXParserFactory;
-
 import org.xml.sax.Attributes;
 import org.xml.sax.SAXException;
 import org.xml.sax.helpers.DefaultHandler;
+import java.util.*;
 
-import java.util.HashMap;
-import java.util.Map;
-
-import java.util.Deque;
-
-import java.util.Vector;
-import java.util.Random;
 public class TraceHLCTimestampingOfflineArithPredDet {
-
-    //static int highest_C_seensofar=0;
     static int snapshotcount=0;
+    static int flex_window_snapshotcount=0;
+    static int fixed_window_snapshotcount=0;
     static String inpfilename="";
     static int debugmode=0;
     static int mode=0; //msg distribution mode
     static String clockmode="HLC";
-    static int gamma = 0;//value by which right end point of the interval will be extended
+    static float gamma = 0;//value by which right end point of the interval will be extended
+    static String outputLocation = "";
     public static void main(String[] args)
     {
         try
         {
-            if(args.length < 3) {
-                System.out.println("Expected number of arguments: 3. Provided "+args.length);
+            if(args.length < 5) {
+                System.out.println("Expected number of arguments: 5. Provided "+args.length);
                 System.exit(0);
             }
             debugmode = Integer.parseInt(args[0]); //debugmode==1 is printing mode, debugmode == 2 only prints changepoints and candidates
             mode=Integer.parseInt(args[1]); //if 2-different-msg-distr-mode, anything else is normal msg distribution mode..
-            if(mode==2)
-            {
+            /*if(mode==2) {
                 System.out.println("Different message distribution mode");
-            }
-            else if(mode==1)
-            {
+            } else if(mode==1) {
                 System.out.println("Intra group message distribution mode");
-            }
-            else
-            {
+            } else {
                 System.out.println("Normal message distribution mode");
-            }
-			/*
-			clockmode=args[2];
-			System.out.println("clockmode:"+clockmode);
-			if(!clockmode.equals("HLC"))
-			{
-				System.out.println("Unexpected clock. Expecting HLC.");
-				System.exit(0);
-			}
-			*/
-            inpfilename="../../predicate_a0.010000_e100_l0.100000_d10_v1_run0.xml";
+            }*/
             //setting gamma to -1 here by providing -1 as the third input argument - will set it to epsilon below
-            gamma = Integer.parseInt(args[2]);
+            gamma = Float.parseFloat(args[2]);
+            inpfilename = args[3];
+            outputLocation = args[4];
             File inputFile = new File(inpfilename);
             SAXParserFactory factory = SAXParserFactory.newInstance();
             SAXParser saxParser = factory.newSAXParser();//create XML parser instance
@@ -82,18 +63,13 @@ class UserHandler extends DefaultHandler
     boolean bstart_time=false;
     boolean bend_time=false;
     boolean bmisc=false;
-
     int proc_id=-1;//variable to remember process id
-
     int sender_time=-1;// variable to remember sender time for message RECEIVE
     int senderid=-1;// variable to remember sender id for message RECEIVE
-
     SysAtHand sysathand=new SysAtHand(); //object that accounts for epsilon and number of processes in current system
-
     Map<Integer, Process> mapofprocesses = new HashMap<Integer, Process>();//map of processes with process id as the key and Process instance as value
-
-    Vector<Double> rcv_probab; //declared but will be defined only if in "different-msg-distr-mode"	
-
+    Vector<Double> rcv_probab; //declared but will be defined only if in "different-msg-distr-mode"
+    HLC largestIntervalEnd;
     @Override
     public void startElement(String uri, String localName, String qName, Attributes attributes) throws SAXException
     {
@@ -115,13 +91,16 @@ class UserHandler extends DefaultHandler
             //setting gamma to epsilon if the provided value is negative
             if(TraceHLCTimestampingOfflineArithPredDet.gamma < 0) {
                 TraceHLCTimestampingOfflineArithPredDet.gamma = sysathand.GetEpsilon();
+            } else if(TraceHLCTimestampingOfflineArithPredDet.gamma > 0){
+                TraceHLCTimestampingOfflineArithPredDet.gamma = (int)Math.floor(sysathand.GetEpsilon() * TraceHLCTimestampingOfflineArithPredDet.gamma);
             }
-
+            else {
+                //use 0 as gamma value
+            }
             if((TraceHLCTimestampingOfflineArithPredDet.mode==1)||(TraceHLCTimestampingOfflineArithPredDet.mode==2))
             {
                 rcv_probab=new Vector<Double>(nproc);
             }
-
             //create nproc number of instances of class process and assign ids to them
             for (int i=0; i<nproc; i++)
             {
@@ -136,19 +115,21 @@ class UserHandler extends DefaultHandler
                 }
                 Process proc = new Process(i,nwclock);
                 mapofprocesses.put(i,proc);
-
-                if((TraceHLCTimestampingOfflineArithPredDet.mode==1)||(TraceHLCTimestampingOfflineArithPredDet.mode==2))
-                {
-                    if(i<nproc/2)
-                    {
+                if((TraceHLCTimestampingOfflineArithPredDet.mode==1)||(TraceHLCTimestampingOfflineArithPredDet.mode==2)){
+                    if(i<nproc/2) {
                         rcv_probab.add(0.5);
-                    }
-                    else
-                    {
+                    } else {
                         rcv_probab.add(1.0);
                     }
                 }
             }
+            //variable to keep track of the largest know HLC timestamp -- needed to bound
+            //epsilon extension of last change-points at processes
+            Vector<Integer> tempVector = new Vector<Integer>();
+            tempVector.add(0);
+            tempVector.add(0);
+            tempVector.add(0);
+            largestIntervalEnd=new HLC(tempVector);
         }
         else if (qName.equalsIgnoreCase("sender_time"))
         {
@@ -185,10 +166,7 @@ class UserHandler extends DefaultHandler
             String name = attributes.getValue("name");
             String value = attributes.getValue("value");
             String old_value = attributes.getValue("old_value");
-
-
             Process proc= mapofprocesses.get(proc_id);
-
             //create separate version of clocks for the candidate
             Clock nwclock1=new Clock();
             Clock nwclock2=new Clock();
@@ -212,26 +190,30 @@ class UserHandler extends DefaultHandler
                 hlcvector2.add(0);
                 nwclock2=new HLC(hlcvector2);
                 nwclock2.setClock(proc.getProcClock().getClock());
-                nwclock2.setClockPlusValue(TraceHLCTimestampingOfflineArithPredDet.gamma);
+                //keeping track of the actual clock value of the largest interval end
+                if(largestIntervalEnd.lessThan(nwclock2)){
+                    largestIntervalEnd.setClock(nwclock2.getClock());
+                }
+                nwclock2.setClockPlusValue((int)TraceHLCTimestampingOfflineArithPredDet.gamma);
+                if(value.equals("true"))
+                {
+                    //this was used for an earlier implementation where intervals were
+                    //reported as pairs of end-points and intervals during which the value of the local variable "x"
+                    //at a process was true were also referred to as true-intervals were reported as "Candidates"
+                    //add candidate to process queue
+                    proc.newCandidateOccurance(nwclock1,nwclock2);
+                    //add change-points to process queue
+                    proc.newChangePoint(nwclock1,1,1);
+                    proc.newChangePoint(nwclock2,-1,1);
+                }
+                /* //uncomment the else part when you have the implementation for processing arithmetic intervals ready
+                else{
+                    proc.newChangePoint(nwclock1,1,0);
+                    proc.newChangePoint(nwclock2,-1,0);
+                }
+                 */
+                mapofprocesses.put(proc_id,proc);
             }
-            //this was used for an earlier implementation where intervals were
-            //reported as pairs of end-points and intervals during which the value of the local variable "x"
-            //at a process was true were also referred to as true-intervals were reported as "Candidates"
-            //add candidate to process queue
-            proc.newCandidateOccurance(nwclock1,nwclock2);
-            //add change-points to process queue
-            if(value.equals("true"))
-            {
-                proc.newChangePoint(nwclock1,1,1);
-                proc.newChangePoint(nwclock2,-1,1);
-            }
-            /* //uncomment the else part when you have the implementation for processing arithmetic intervals ready
-            else{
-                proc.newChangePoint(nwclock1,1,0);
-                proc.newChangePoint(nwclock2,-1,0);
-            }
-             */
-            mapofprocesses.put(proc_id,proc);
         }
         else if (qName.equalsIgnoreCase("misc"))
         {
@@ -371,214 +353,245 @@ class UserHandler extends DefaultHandler
             //System.out.println("misc: " + new String(ch, start, length));
         }
     }
-
     void ProcessAndClearCandQueues_HLC()
     {
         if (sysathand.GetNumberOfProcesses()==0) {
             System.out.println("Zero processes in system.");
             System.exit(0);
         }
-        String nwfolder=TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(0, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf('.')); //input file name without file extension
-        BufferedWriter bwTemp_bef =null,bw1_bef=null,bw2_bef=null,bw3_bef=null,bwTemp =null,bw1=null,bw2=null,bw3=null;
+        //get the text between last backslash and .xml
+        String folderName = TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf('/')+1, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf(".xml"));
+        String nwfolder=TraceHLCTimestampingOfflineArithPredDet.outputLocation+"\\"+folderName; //input file name without file extension
+        //For debugging purposes
         /*****************print all candidates and changepoints of all the processes before preprocessing***************/
         if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
-            //For debugging purposes
-            String snapshot_cand_file=nwfolder+"\\before_candidates"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_mode_"+TraceHLCTimestampingOfflineArithPredDet.mode+".txt";
-            String snapshot_cpt_file=nwfolder+"\\before_changepoints"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_mode"+TraceHLCTimestampingOfflineArithPredDet.mode+".txt";
-            for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
-            {
-                Process currProc= mapofprocesses.get(i); //get the current state of the process
-                //since same file is passed for all processes -delete before a run because it is set to open in append mode
-                currProc.printCandQueueToFile(snapshot_cand_file);
-                currProc.printCPtQueueToFile(snapshot_cpt_file);
+            String snapshot_cand_file="",snapshot_cpt_file="";
+            if(TraceHLCTimestampingOfflineArithPredDet.gamma==0){
+                snapshot_cand_file = nwfolder + "\\before_candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
+                snapshot_cpt_file = nwfolder + "\\before_changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
+            } else {
+                snapshot_cand_file = nwfolder + "\\before_candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
+                snapshot_cpt_file = nwfolder + "\\before_changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
             }
+            printCandidatesForAllProc(snapshot_cand_file);
+            printChangepointsForAllProc(snapshot_cpt_file);
         }
-        for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
-        {
+        for(int i=0;i<sysathand.GetNumberOfProcesses();i++){//loop through all process queues
             Process currProc= mapofprocesses.get(i); //get the current state of the process
             currProc.setCPtQueue(currProc.cleanUpChangePtQ());
+            currProc.fixLastChangepoint(largestIntervalEnd);
         }
-
         /*****************print all candidates and changepoints of all the processes to see if change points were processed correctly***************/
         if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
-            //For debugging purposes
-            String snapshot_cand_file=nwfolder+"\\candidates"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_mode_"+TraceHLCTimestampingOfflineArithPredDet.mode+".txt";
-            String snapshot_cpt_file=nwfolder+"\\changepoints"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_mode"+TraceHLCTimestampingOfflineArithPredDet.mode+".txt";
-            for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
-            {
-                Process currProc= mapofprocesses.get(i); //get the current state of the process
-                //since same file is passed for all processes -delete before a run because it is set to open in append mode
-                currProc.printCandQueueToFile(snapshot_cand_file);
-                currProc.printCPtQueueToFile(snapshot_cpt_file);
+            String snapshot_cand_file="",snapshot_cpt_file="";
+            if(TraceHLCTimestampingOfflineArithPredDet.gamma==0){
+                snapshot_cand_file = nwfolder + "\\candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode +".txt";
+                snapshot_cpt_file = nwfolder + "\\changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode +".txt";
+            } else {
+                snapshot_cand_file = nwfolder + "\\candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
+                snapshot_cpt_file = nwfolder + "\\changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
             }
+            printCandidatesForAllProc(snapshot_cand_file);
+            printChangepointsForAllProc(snapshot_cpt_file);
         }
         //create variable overlap_count
         int overlap_count= 0;
         int prevtokenend = 0;
         //variable for window based overlap count
         int previous_window=0;
-        int windowSnapshotCount=0;
-        Vector<Integer> temp= new Vector<Integer>();
-        temp.add(0);
-        temp.add(0);
-        temp.add(0);
-        //variable for finding and storing minimum changepoint
-        ChangePoint minCPt= new ChangePoint(new HLC(temp),0,-1);
-        int minCPtProc=-1;	//process corresponding to the minimum changepoint	
-        try {
-            do //until minCPtProc=-1 at the end of the loop - there is no more unprocessed changepoint to process
+        int minCPtProc=-1;	//process corresponding to the minimum changepoint
+        do //until minCPtProc=-1 at the end of the loop - there is no more unprocessed changepoint to process
+        {
+            /**********Find minimum among first changepoint in each process' queue*******/
+            minCPtProc = findMinCptProc();
+            //if at least one process had at least one changepoint to process, then minCPtProc is not -1
+            if (minCPtProc!=-1)
             {
-                minCPtProc=-1;//set to default value beginning of every loop			
-                /**********Find minimum among first changepoint in each process' queue*******/
-                for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
+                //removing the minimum changepoint from the respective queue and processing it
+                Process chosenProc= mapofprocesses.get(minCPtProc);//get the current state of the process
+                Deque<ChangePoint> chosenProccPtq = chosenProc.getCPtQueue();//get the changepoint queue of the process
+                if (chosenProccPtq.isEmpty()) {
+                    System.out.println("Something went wrong. Queue at the chosen process is empty.");
+                    System.exit(0);
+                }
+                ChangePoint currentCPt=chosenProccPtq.removeFirst();
+                /**************************update overlap count accordingly**************************/
+                overlap_count=overlap_count+currentCPt.getEndPointType();
+                //remember the effect of clearing the candidate queue of the process
+                chosenProc.setCPtQueue(chosenProccPtq);
+                //remember to update mapofprocesses accordingly
+                mapofprocesses.put(minCPtProc,chosenProc);
+                /*************Report timestamp of overlap if it corresponds to a consistent cut****************/
+                if (overlap_count==sysathand.GetNumberOfProcesses())
                 {
-                    Process otherProc= mapofprocesses.get(i); //get the current state of the process
-                    Deque<ChangePoint> otherProccPtq=otherProc.getCPtQueue();//get the changepoint queue of the process
-                    if (!otherProccPtq.isEmpty())//if there is at least one unprocessed changepoint
-                    {
-                        ChangePoint cPt = otherProccPtq.getFirst();//get current first changepoint in queue
-                        if (minCPtProc==-1) //default value is -1, 
-                        {
-                            minCPt=cPt;	//setting the changepoint from the first process as minimum to start with
-                            minCPtProc=i;
+                    String snapshot_outfile="",snapshot_flex_window_counted_outfile="",snapshot_fixed_window_counted_outfile="";
+                    //if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
+                        //********************************creating needed files and folders reporting*******************************
+                        if(TraceHLCTimestampingOfflineArithPredDet.gamma==0){
+                            snapshot_outfile=nwfolder+"\\snapshots_clk_"+TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
+                            snapshot_flex_window_counted_outfile=nwfolder+"\\snapshots_flex_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
+                            snapshot_fixed_window_counted_outfile=nwfolder+"\\snapshots_fixed_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
+                        } else {
+                            snapshot_outfile=nwfolder+"\\snapshots_clk_"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_gamma"+(int)TraceHLCTimestampingOfflineArithPredDet.gamma+".txt";
+                            snapshot_flex_window_counted_outfile=nwfolder+"\\snapshots_flex_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_gamma"+(int)TraceHLCTimestampingOfflineArithPredDet.gamma+".txt";
+                            snapshot_fixed_window_counted_outfile=nwfolder+"\\snapshots_fixed_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_gamma"+(int)TraceHLCTimestampingOfflineArithPredDet.gamma+".txt";
                         }
-                        else{
-                            int minl=minCPt.getcPointTimestamp().getClock().get(1);
-                            int minc=minCPt.getcPointTimestamp().getClock().get(2);
-                            int minPtType=minCPt.getEndPointType();
-                            int currentl=cPt.getcPointTimestamp().getClock().get(1);
-                            int currentc=cPt.getcPointTimestamp().getClock().get(2);
-                            int currentPtType=cPt.getEndPointType();
-                            //compare l and c values of all the smallest changepoints across processes
-                            // if l and c values are equal then right endpoints have higher priority than left endpoints - i.e. they should be processed first
-                            if (((currentl== minl)&&(currentc== minc)&&(currentPtType<minPtType)) || ((currentl< minl) || ((currentl== minl)&&(currentc< minc))))
-                            {
-                                minCPt=cPt;
-                                minCPtProc=i;
-                            }
+                        //Create folder and files only if it is the first time
+                        if(TraceHLCTimestampingOfflineArithPredDet.snapshotcount==0){ //when the first cut gets detected clean the snapshots file if one already exists
+                            fileClearCreateParentDirectory(snapshot_outfile);
+                            fileClearCreateParentDirectory(snapshot_flex_window_counted_outfile);
+                            fileClearCreateParentDirectory(snapshot_fixed_window_counted_outfile);
                         }
+                    //}
+                    boolean markifcounted=false;
+                    /*********************FLEXIBLE WINDOW BASED COUNTING OF SNAPSHOTS**************************/
+                    prevtokenend = flexWindowCountSnapshot(currentCPt, prevtokenend,minCPtProc,snapshot_flex_window_counted_outfile);
+                    /*********************FIXED WINDOW BASED COUNTING OF SNAPSHOTS**************************/
+                    int temp_window = previous_window;
+                    previous_window = fixedWindowCountSnapshot(currentCPt,previous_window,minCPtProc,snapshot_fixed_window_counted_outfile);
+                    if (temp_window!=previous_window){
+                        markifcounted = true;
                     }
-                }
-                //if at least one process had at least one changepoint to process, then minCPtProc is not -1
-                if (minCPtProc!=-1)
-                {
-                    //removing the minimum changepoint from the respective queue and processing it
-                    Process chosenProc= mapofprocesses.get(minCPtProc);//get the current state of the process
-                    Deque<ChangePoint> chosenProccPtq = chosenProc.getCPtQueue();//get the changepoint queue of the process
-                    if (chosenProccPtq.isEmpty()) {
-                        System.out.println("Something went wrong. Queue at the chosen process is empty.");
-                        System.exit(0);
-                    }
-                    ChangePoint currentCPt=chosenProccPtq.removeFirst();
-                    /**************************update overlap count accordingly**************************/
-                    overlap_count=overlap_count+currentCPt.getEndPointType();
-                    //remember the effect of clearing the candidate queue of the process
-                    chosenProc.setCPtQueue(chosenProccPtq);
-                    //remember to update mapofprocesses accordingly
-                    mapofprocesses.put(minCPtProc,chosenProc);
-                    /*************Report timestamp of overlap if any****************/
-                    if (overlap_count==sysathand.GetNumberOfProcesses())
-                    {
-                        String snapshot_outfile="",snapshot_counted_outfile="",snapshot_window_counted_outfile="";
-                        if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
-                            //********************************creating needed files and folders reporting*******************************
-                            snapshot_outfile=nwfolder+"\\snapshots_clk_"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_mode_"+TraceHLCTimestampingOfflineArithPredDet.mode+".txt";
-                            snapshot_counted_outfile=nwfolder+"\\snapshots_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_mode"+TraceHLCTimestampingOfflineArithPredDet.mode+".txt";
-                            snapshot_window_counted_outfile=nwfolder+"\\snapshots_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_mode"+TraceHLCTimestampingOfflineArithPredDet.mode+".txt";
-                            //Create folder and files only if it is the first time
-                            if(TraceHLCTimestampingOfflineArithPredDet.snapshotcount==0){ //when the first cut gets detected clean the snapshots file if one already exists
-                                File ifilename = new File(snapshot_outfile);
-                                ifilename.getParentFile().mkdirs(); //create all necessary parent directories
-                                bw1= new BufferedWriter(new FileWriter(ifilename));//opening file in write mode so anything already existing will be cleared
-                                File ifilename1 = new File(snapshot_counted_outfile);
-                                bw2= new BufferedWriter(new FileWriter(ifilename1));//opening file in write mode so anything already existing will be cleared
-                                File ifilename2 = new File(snapshot_window_counted_outfile);
-                                bw3= new BufferedWriter(new FileWriter(ifilename2));//opening file in write mode so anything already existing will be cleared
-                            }
-                        }
-                        /*********************FLEXIBLE WINDOW BASED COUNTING OF SNAPSHOTS**************************/
-                        /********Counting the snapshot only if it is epsilon away from previously detected snapshot********/
-                        boolean markifcounted=false;
-                        int cPtLvalue = currentCPt.getcPointTimestamp().getClock().get(1);
-                        //if current overlap's i.e.changepoints' start-l is epsilon away from the previous overlap's start-l
-                        if((cPtLvalue-prevtokenend>sysathand.GetEpsilon()) || (TraceHLCTimestampingOfflineArithPredDet.snapshotcount==0))
-                        {
-                            TraceHLCTimestampingOfflineArithPredDet.snapshotcount++;
-                            //get/save the overlap's ending pt
-                            prevtokenend=cPtLvalue;
-                            /**********writing to snapshot_counted_outfile*******************/
-                            if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1)
-                            {
-                                bw2= new BufferedWriter(new FileWriter(snapshot_counted_outfile, true));//true for append									
-                                bw2.write("At Process"+minCPtProc+" Snapshot No:"+TraceHLCTimestampingOfflineArithPredDet.snapshotcount+"-->");
-                                bw2.write("[P"+minCPtProc+":<"+currentCPt.getcPointTimestamp().getClock().get(0)+",<"+currentCPt.getcPointTimestamp().getClock().get(1)+","+currentCPt.getcPointTimestamp().getClock().get(2)+">>\n");
-                                bw2.newLine();
-                            }
-                        }
-                        /*********************FIXED WINDOW BASED COUNTING OF SNAPSHOTS**************************/
-                        /***Counting the snapshot only if its current-epsilon-based window is different from the previously detected snapshot********/
-                        //compute the current cut's window based on epsilon
-                        int current_cut_window=getWindow(cPtLvalue,sysathand.GetEpsilon());
-                        if((windowSnapshotCount==0)||(current_cut_window>previous_window))
-                        {
-                            windowSnapshotCount++;
-                            previous_window=current_cut_window;
-                            markifcounted=true;
-                            //System.out.println("Counted.");
-                            if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
-                                /***************writing to snapshot_window_counted_outfile************************/
-                                bw3= new BufferedWriter(new FileWriter(snapshot_window_counted_outfile, true));//true for append									
-                                bw3.write("At Process"+minCPtProc+" Snapshot No:"+TraceHLCTimestampingOfflineArithPredDet.snapshotcount+"-->");
-                                bw3.write("[P"+minCPtProc+":<"+currentCPt.getcPointTimestamp().getClock().get(0)+",<"+currentCPt.getcPointTimestamp().getClock().get(1)+","+currentCPt.getcPointTimestamp().getClock().get(2)+">>\n");
-                                bw3.newLine();
-                            }
-                        }
-                        /********************writing to all-snapshots file (counted or not)**************************/
-                        if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
-                            bw1= new BufferedWriter(new FileWriter(snapshot_outfile, true));//true for append
-                            bw1.write("[P"+minCPtProc+":<"+currentCPt.getcPointTimestamp().getClock().get(0)+",<"+currentCPt.getcPointTimestamp().getClock().get(1)+","+currentCPt.getcPointTimestamp().getClock().get(2)+">>\n");
-                            bw1.write("At Process"+minCPtProc+" Snapshot No:"+TraceHLCTimestampingOfflineArithPredDet.snapshotcount+"-->");
-                            if(markifcounted)
-                            {
-                                bw1.write(" Was Counted");
-                                markifcounted=false;
-                            }
-                            bw1.newLine();
-                        }
-                    }//end of if overlap == number of processes
-                }//end of if (minCPtProc!=-1)
-            }while(minCPtProc!=-1);
-        }//end of try block
-        catch (IOException ioe) {
-            ioe.printStackTrace();
-        }
-        finally{
-            try{
-                //close files
-                if (bwTemp != null){
-                    bwTemp.close();
-                }
-                if (bw1 != null) {
-                    bw1.close();
-                }
-                if (bw2 != null) {
-                    bw2.close();
-                }
-                if (bw3 != null) {
-                    bw3.close();
-                }
-            }
-            catch (IOException ioe2){
-                ioe2.printStackTrace();
-            }
-        }//end of finally block
-        System.out.println("No more Changepoints to process.");
-        System.out.println("Window based snapshot count:"+ windowSnapshotCount);
+                    /********************writing to all-snapshots file (counted or not)**************************/
+                    //if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
+                    reportSnapshot(currentCPt,snapshot_outfile,  minCPtProc, markifcounted);
+                    //}
+                }//end of if overlap == number of processes
+            }//end of if (minCPtProc!=-1)
+        }while(minCPtProc!=-1);
+        //System.out.println("No more Changepoints to process.");
+        System.out.println("Window based snapshot count:"+ TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount);
     }
     int getWindow(int cPtLvalue, int syseps)
     {
         int window=cPtLvalue/syseps;
         //System.out.println("smallestptincut:"+smallestptincut+";syseps:"+syseps+";Window:"+window);
         return window;
+    }
+    int findMinCptProc(){
+        int minCPtProc=-1; //set to default value beginning
+        Vector<Integer> temp= new Vector<Integer>();
+        temp.add(0);
+        temp.add(0);
+        temp.add(0);
+        //variable for finding and storing minimum changepoint
+        ChangePoint minCPt= new ChangePoint(new HLC(temp),0,-1);
+        for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
+        {
+            Process otherProc= mapofprocesses.get(i); //get the current state of the process
+            Deque<ChangePoint> otherProccPtq=otherProc.getCPtQueue();//get the changepoint queue of the process
+            if (!otherProccPtq.isEmpty())//if there is at least one unprocessed changepoint
+            {
+                ChangePoint cPt = otherProccPtq.getFirst();//get current first changepoint in queue
+                if (minCPtProc==-1) //default value is -1,
+                {
+                    minCPt=cPt;	//setting the changepoint from the first process as minimum to start with
+                    minCPtProc=i;
+                }
+                else{
+                    int minl=minCPt.getcPointTimestamp().getClock().get(1);
+                    int minc=minCPt.getcPointTimestamp().getClock().get(2);
+                    int minPtType=minCPt.getEndPointType();
+                    int currentl=cPt.getcPointTimestamp().getClock().get(1);
+                    int currentc=cPt.getcPointTimestamp().getClock().get(2);
+                    int currentPtType=cPt.getEndPointType();
+                    //compare l and c values of all the smallest changepoints across processes
+                    // if l and c values are equal then right endpoints have higher priority than left endpoints - i.e. they should be processed first
+                    if (((currentl== minl)&&(currentc== minc)&&(currentPtType<minPtType)) || ((currentl< minl) || ((currentl== minl)&&(currentc< minc))))
+                    {
+                        minCPt=cPt;
+                        minCPtProc=i;
+                    }
+                }
+            }
+        }
+        return minCPtProc;
+    }
+    void printCandidatesForAllProc(String filename){
+        fileClearCreateParentDirectory(filename);
+        for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
+        {
+            Process currProc= mapofprocesses.get(i); //get the current state of the process
+            //since same file is passed for all processes -delete before a run because it is set to open in append mode
+            currProc.printCandQueueToFile(filename);
+        }
+    }
+    void printChangepointsForAllProc(String filename){
+        fileClearCreateParentDirectory(filename);
+        for(int i=0;i<sysathand.GetNumberOfProcesses();i++)//loop through all process queues
+        {
+            Process currProc= mapofprocesses.get(i); //get the current state of the process
+            //since same file is passed for all processes -delete before a run because it is set to open in append mode
+            currProc.printCPtQueueToFile(filename);
+        }
+    }
+    void fileClearCreateParentDirectory(String filename){
+        try{//clear current contents of the file
+            File ifilename = new File(filename);
+            ifilename.getParentFile().mkdirs();//create necessary parent directory
+            new PrintWriter(filename).close();//clear current contents of the file
+        } catch (IOException ioe){
+            ioe.printStackTrace();
+        }
+    }
+    int flexWindowCountSnapshot(ChangePoint currentCPt, int prevtokenend, int minCPtProc, String filename){
+        /********Counting the snapshot only if it is epsilon away from previously detected snapshot********/
+        int cPtLvalue = currentCPt.getcPointTimestamp().getClock().get(1);
+        //if current overlap's i.e.changepoints' start-l is epsilon away from the previous overlap's start-l
+        if((cPtLvalue-prevtokenend>sysathand.GetEpsilon()) || (TraceHLCTimestampingOfflineArithPredDet.flex_window_snapshotcount==0)){
+            TraceHLCTimestampingOfflineArithPredDet.flex_window_snapshotcount++;
+            //get/save the overlap's ending pt
+            prevtokenend=cPtLvalue;
+            /**********writing to snapshot_counted_outfile*******************/
+            if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
+                writeSnapshotToFile(minCPtProc, currentCPt, filename,TraceHLCTimestampingOfflineArithPredDet.flex_window_snapshotcount);
+            }
+        }
+        return prevtokenend;
+    }
+    int fixedWindowCountSnapshot(ChangePoint currentCPt,int previous_window, int minCPtProc, String filename){
+        /***Counting the snapshot only if its current-epsilon-based window is different from the previously detected snapshot********/
+        //int cPtLvalue = currentCPt.getcPointTimestamp().getClock().get(1);
+        int cPtvalue = currentCPt.getcPointTimestamp().getClock().get(0);
+        //compute the current cut's window based on epsilon
+        int current_cut_window=getWindow(cPtvalue,sysathand.GetEpsilon());
+        if((TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount==0)||(current_cut_window>previous_window))
+        {
+            TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount++;
+            previous_window=current_cut_window;
+            //System.out.println("Counted.");
+            //if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1)
+            {
+                /***************writing to snapshot_window_counted_outfile************************/
+                writeSnapshotToFile(minCPtProc,currentCPt,filename,TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount);
+            }
+        }
+        return previous_window;
+    }
+    void reportSnapshot(ChangePoint currentCPt, String filename, int minCPtProc, boolean markifcounted){
+        TraceHLCTimestampingOfflineArithPredDet.snapshotcount++;
+        writeSnapshotToFile(minCPtProc, currentCPt,filename,TraceHLCTimestampingOfflineArithPredDet.snapshotcount);
+        if(markifcounted) {
+            appendToFile(filename," Was Counted");
+        }
+    }
+    void writeSnapshotToFile(int minCPtProc, ChangePoint currentCPt, String filename, int snapshotCount){
+        try {
+            BufferedWriter bw2 = new BufferedWriter(new FileWriter(filename, true));//true for append
+            bw2.write("\n At Process"+minCPtProc+" Snapshot No:"+snapshotCount+"-->");
+            bw2.write("[P"+minCPtProc+":<"+currentCPt.getcPointTimestamp().getClock().get(0)+",<"+currentCPt.getcPointTimestamp().getClock().get(1)+","+currentCPt.getcPointTimestamp().getClock().get(2)+">>");
+            bw2.close();
+        } catch (IOException ioe) {
+            ioe.printStackTrace();
+        }
+    }
+    void appendToFile(String filename, String text){
+        try{
+            BufferedWriter bw1 = new BufferedWriter(new FileWriter(filename, true));//true for append
+            bw1.write(text);
+            bw1.close();
+        } catch (IOException ioe){
+            ioe.printStackTrace();
+        }
     }
 }

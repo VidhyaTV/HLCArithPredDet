@@ -133,9 +133,7 @@ class Process
             setProcOldClock(getProcClock());
         }
         clock.updateLocal(physicalTime);
-
         //System.out.println("At Process:"+id+"; Physical Time:"+physicalTime);
-
         if(sendmsg)
         {
             Clock formsgclk=new Clock();
@@ -160,10 +158,8 @@ class Process
         if(getlastsendorrecorlocevntpt()!=receiver_time)
         {
             setProcOldClock(getProcClock());
-
         }
         clock.updateMsgRcv(receiver_time,sndrClk);
-
         setlastsendorrecorlocevntpt(receiver_time);
     }
     MessageSendStruct getClockfromQueue(int passed_phytime)
@@ -292,7 +288,30 @@ class Process
             }
         }
     }
-
+    void fixLastChangepoint(HLC largestIntervalEnd){
+        if(!cPointQueue.isEmpty()){
+            //get last two changepoints - first, second
+            ChangePoint second = cPointQueue.removeLast();
+            ChangePoint first = cPointQueue.removeLast();
+            while(largestIntervalEnd.lessThan(second.getcPointTimestamp())){
+                //if first is larger than largestIntervalEnd
+                if (largestIntervalEnd.lessThan(first.getcPointTimestamp())) {
+                    //drop first and second
+                    //continue loop
+                    second = cPointQueue.removeLast();
+                    first = cPointQueue.removeLast();
+                } else if (largestIntervalEnd.lessThan(second.getcPointTimestamp())) {
+                    //if first is not larger but second is larger than largestIntervalEnd
+                    //update second's clock to largestIntervalEnd
+                    second.setcPointTimestamp(largestIntervalEnd);
+                    //end loop - because the intervals are cleaned before invoking this function all changepoints before a have smaller timestamps
+                }
+            }
+            //put it back into the queue
+            cPointQueue.add(first);
+            cPointQueue.add(second);
+        }
+    }
     Deque<ChangePoint> cleanUpChangePtQ(){
         Deque<ChangePoint> cleansedQ = new ArrayDeque<ChangePoint>();
         if (!cPointQueue.isEmpty())//if there is at least one unprocessed changepoint
@@ -316,10 +335,14 @@ class Process
                     cleansedQ.add(currentRCPt);
                     while (intermediateCPtsQ.peek() != null) {//process any intermediate changepoints
                         //change L's timestamp of every entry in intermediateCPtsQ to Rj's timestamp
-                        ChangePoint intermediateCPtL = intermediateCPtsQ.removeFirst(); //processing from last intermediate interval so that they can be added to the queue front in reverse order
+                        ChangePoint intermediateCPtL = intermediateCPtsQ.removeFirst();
                         ChangePoint intermediateCPtR = intermediateCPtsQ.removeFirst();
                         //currentCPt overlapped with entire intermediate interval drop it else modify its left end
                         if (intermediateCPtR.getcPointTimestamp().lessThan(currentRCPt.getcPointTimestamp()) || intermediateCPtR.getcPointTimestamp().equalTo(currentRCPt.getcPointTimestamp())) {
+                            //should not happen because the right endpoint of the intermediate intervals are also extended by epsilon
+                            // so should be larger
+                            System.out.println("Intermediate interval has right endpoint smaller than the current interval's right endpoint.");
+                            System.exit(0);
                             continue;//ignore any intermediate intervals with smaller value
                         }
                         //set L value to Rj value
@@ -327,13 +350,64 @@ class Process
                         Clock origLTime = intermediateCPtL.getcPointTimestamp();
                         origLTime.setClock(currRClock.getClock());
                         intermediateCPtL.setcPointTimestamp(origLTime);
-                        //put it back in the original queue
-                        //in the right order
-                        cleansedQ.add(intermediateCPtL);
-                        cleansedQ.add(intermediateCPtR);
-                        // remember the right endpoint of the current intermediate interval to be used as left endpoint of the next intermediate interval if needed
-                        currentRCPt = intermediateCPtR;
+                        //the next pair of changepoints are those that satisfied the outer if clause -
+                        //i.e. having larger left changepoint than right endpoint
+                        //no intermediate right changepoint should be larger than that next pair's left changepoint
+                        //however if the ivalue corresponding to the changepoint is larger then the left changepoint of the next pair is pushed right
+                        if (nextLCPt.getcPointTimestamp().lessThan(intermediateCPtR.getcPointTimestamp())){
+                            if(nextLCPt.getcPointTimestamp().lessThan(intermediateCPtL.getcPointTimestamp())){//complete overlap between next and intermediate
+                                if(nextRCPt.getiValue()>=intermediateCPtR.getiValue()){
+                                    //ignore this pair of intermediate changepoints
+                                    continue; //to next pair of intermediate changepoints
+                                } else {
+                                    //add these intermediate changepoints
+                                    //remember its right to modify next pair's left
+                                    //put it back in the original queue
+                                    //in the right order
+                                    cleansedQ.add(intermediateCPtL);
+                                    cleansedQ.add(intermediateCPtR);
+                                    // remember the right endpoint of the current intermediate interval to be used as left endpoint of the next intermediate interval if needed
+                                    currentRCPt = intermediateCPtR;
+                                }
+                            } else {//partial overlap between next and intermediate- there can be only one such interval
+                                if(nextRCPt.getiValue()>=intermediateCPtR.getiValue()){
+                                    //set right of intermediate to left of next
+                                    Clock nextLClock = nextLCPt.getcPointTimestamp();
+                                    Clock origRTime = intermediateCPtR.getcPointTimestamp();
+                                    origRTime.setClock(nextLClock.getClock());
+                                    intermediateCPtR.setcPointTimestamp(origRTime);
+                                    //put it back in the original queue
+                                    //in the right order
+                                    cleansedQ.add(intermediateCPtL);
+                                    cleansedQ.add(intermediateCPtR);
+                                    // remember the right endpoint of the current intermediate interval to be used as left endpoint of the next intermediate interval if needed
+                                    currentRCPt = intermediateCPtR;
+                                } else {
+                                    //add these intermediate changepoints
+                                    //remember its right to modify next pair's left
+                                    //put it back in the original queue
+                                    //in the right order
+                                    cleansedQ.add(intermediateCPtL);
+                                    cleansedQ.add(intermediateCPtR);
+                                    // remember the right endpoint of the current intermediate interval to be used as left endpoint of the next intermediate interval if needed
+                                    currentRCPt = intermediateCPtR;
+                                }
+                            }
+                        } else {
+                            //put it back in the original queue
+                            //in the right order
+                            cleansedQ.add(intermediateCPtL);
+                            cleansedQ.add(intermediateCPtR);
+                            // remember the right endpoint of the current intermediate interval to be used as left endpoint of the next intermediate interval if needed
+                            currentRCPt = intermediateCPtR;
+                        }
                     }
+                    //set next pair's left as last remembered intermediate's right
+                    //set right of intermediate to left of next
+                    Clock currentRClock = currentRCPt.getcPointTimestamp();
+                    Clock origNextLTime = nextLCPt.getcPointTimestamp();
+                    origNextLTime.setClock(currentRClock.getClock());
+                    nextLCPt.setcPointTimestamp(origNextLTime);
                     currentLCPt = nextLCPt;
                     currentRCPt = nextRCPt;
                 } else if (nextLCPt.getiValue() > currentLCPt.getiValue()) {//there is overlap and the successive overlapping interval has higher value
@@ -350,17 +424,40 @@ class Process
                     }
                     currentLCPt = nextLCPt;
                     currentRCPt = nextRCPt;
-                } else {//there is overlap and the successive overlapping interval has smaller value
+                } else {//there is overlap and the successive overlapping interval has smaller or equal value
                     //set Li's timestamp to Rj's timestamp
                     Clock currRClock = currentRCPt.getcPointTimestamp();
                     Clock origLTime = nextLCPt.getcPointTimestamp();
                     origLTime.setClock(currRClock.getClock());
                     nextLCPt.setcPointTimestamp(origLTime);
+                    if (!nextLCPt.getcPointTimestamp().lessThan(nextRCPt.getcPointTimestamp())) {
+                        System.out.println("Updated next interval has larger left endpoint than right endpoint.");
+                        System.exit(0);
+                    }
                     intermediateCPtsQ.add(nextLCPt);
                     intermediateCPtsQ.add(nextRCPt);
-                    //currentLCPt and currentRCPt say the same
+                    //currentLCPt and currentRCPt stay the same
                 }
             }//end of while(cPointQueue.peek() != null)
+            //add last two changepoints
+            cleansedQ.add(currentLCPt);
+            cleansedQ.add(currentRCPt);
+            //add intermediate queue contents if any
+            while (intermediateCPtsQ.peek() != null) {
+                ChangePoint intermediateCPtL = intermediateCPtsQ.removeFirst();
+                ChangePoint intermediateCPtR = intermediateCPtsQ.removeFirst();
+                //set L value to Rj value - maintain continuity among intermediate changepoints
+                Clock currRClock = currentRCPt.getcPointTimestamp();
+                Clock origLTime = intermediateCPtL.getcPointTimestamp();
+                origLTime.setClock(currRClock.getClock());
+                intermediateCPtL.setcPointTimestamp(origLTime);
+                //put it back in the original queue in the right order
+                cleansedQ.add(intermediateCPtL);
+                cleansedQ.add(intermediateCPtR);
+                //remember the right endpoint of the current intermediate interval
+                // to be used as left endpoint of the next intermediate interval if needed
+                currentRCPt = intermediateCPtR;
+            }
         }//end of if(!cPointQueue.isEmpty())
         return cleansedQ;
     }

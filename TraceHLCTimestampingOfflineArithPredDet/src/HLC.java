@@ -79,8 +79,8 @@ class HLC extends Clock
     }
     void updateLocal(int physicalTime)
     {
-        if (getPt()==physicalTime)//typically gets executed only msg send cases
-        {
+        if (getPt()==physicalTime)//typically gets executed only for msg send cases -i.e. interval end and then send happens at same instant,
+        {						//not the other way, if send and then interval-split due to communication happens that interval does not cause a clock update
             //update only c
             int updatedcvalue=getC()+1;
             setC(updatedcvalue);
@@ -117,24 +117,18 @@ class HLC extends Clock
     {
         //l.j := max(l0.j, l.m, pt.j)
         int maxofall=Math.max(Math.max(sndrClk.getClock().get(1),receiver_time),getL());
-
         //HLC update l,c on msg receive
-        if(maxofall==getL())
-        {
+        if(maxofall==getL()) {
             setL(getL());//proc.setL(proc.getL());
             setC(getC()+1);//proc.setC(proc.getC()+1);
             setPt(receiver_time);//proc.setPt(receiver_time);
-        }
-        else if(maxofall==receiver_time)
-        {
-            //System.out.println("CLOCK UPDATED");//
-            updateLocal(receiver_time);
-        }
-        else//Elseif (l.j=l.m) then c.j := c.m + 1//hlc code
-        {
+        } else if (maxofall == sndrClk.getClock().get(1)) {//Elseif (l.j=l.m) then c.j := c.m + 1//hlc code
             setL(sndrClk.getClock().get(1));
             setC(sndrClk.getClock().get(2)+1);
             setPt(receiver_time);
+        } else {//if(maxofall==receiver_time)
+            //System.out.println("CLOCK UPDATED");//
+            updateLocal(receiver_time);
         }
     }
     void setClockPlusValue(int inc) {
