@@ -37,7 +37,7 @@ public class TraceHLCTimestampingOfflineArithPredDet {
             } else {
                 System.out.println("Normal message distribution mode");
             }*/
-            //setting gamma to -1 here by providing -1 as the third input argument - will set it to epsilon below
+            //setting gamma
             gamma = Float.parseFloat(args[2]);
             inpfilename = args[3];
             outputLocation = args[4];
@@ -88,10 +88,8 @@ class UserHandler extends DefaultHandler
             sysathand.SetEpsilon(eps);
             sysathand.SetNumberOfProcesses(nproc);
 
-            //setting gamma to epsilon if the provided value is negative
-            if(TraceHLCTimestampingOfflineArithPredDet.gamma < 0) {
-                TraceHLCTimestampingOfflineArithPredDet.gamma = sysathand.GetEpsilon();
-            } else if(TraceHLCTimestampingOfflineArithPredDet.gamma > 0){
+            //setting gamma to epsilon if the provided value is positive
+            if(TraceHLCTimestampingOfflineArithPredDet.gamma > 0){
                 TraceHLCTimestampingOfflineArithPredDet.gamma = (int)Math.floor(sysathand.GetEpsilon() * TraceHLCTimestampingOfflineArithPredDet.gamma);
             }
             else {
@@ -197,14 +195,19 @@ class UserHandler extends DefaultHandler
                 nwclock2.setClockPlusValue((int)TraceHLCTimestampingOfflineArithPredDet.gamma);
                 if(value.equals("true"))
                 {
-                    //this was used for an earlier implementation where intervals were
-                    //reported as pairs of end-points and intervals during which the value of the local variable "x"
-                    //at a process was true were also referred to as true-intervals were reported as "Candidates"
-                    //add candidate to process queue
-                    proc.newCandidateOccurance(nwclock1,nwclock2);
-                    //add change-points to process queue
-                    proc.newChangePoint(nwclock1,1,1);
-                    proc.newChangePoint(nwclock2,-1,1);
+                    if(proc.getAcceptInterval()==0){
+                        //this was used for an earlier implementation where intervals were
+                        //reported as pairs of end-points and intervals during which the value of the local variable "x"
+                        //at a process was true were also referred to as true-intervals were reported as "Candidates"
+                        //add candidate to process queue
+                        proc.newCandidateOccurance(nwclock1,nwclock2);
+                        //add change-points to process queue
+                        proc.newChangePoint(nwclock1,1,1);
+                        proc.newChangePoint(nwclock2,-1,1);
+                        proc.setAcceptInterval(1);
+                    } else{
+                        proc.setAcceptInterval(0);
+                    }
                 }
                 /* //uncomment the else part when you have the implementation for processing arithmetic intervals ready
                 else{
@@ -359,6 +362,8 @@ class UserHandler extends DefaultHandler
             System.out.println("Zero processes in system.");
             System.exit(0);
         }
+        //variable for window based overlap count
+        HashSet<Integer> windowsSeen = new HashSet<Integer>();
         //get the text between last backslash and .xml
         String folderName = TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf('/')+1, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf(".xml"));
         String nwfolder=TraceHLCTimestampingOfflineArithPredDet.outputLocation+"\\"+folderName; //input file name without file extension
@@ -397,8 +402,6 @@ class UserHandler extends DefaultHandler
         //create variable overlap_count
         int overlap_count= 0;
         int prevtokenend = 0;
-        //variable for window based overlap count
-        int previous_window=0;
         int minCPtProc=-1;	//process corresponding to the minimum changepoint
         do //until minCPtProc=-1 at the end of the loop - there is no more unprocessed changepoint to process
         {
@@ -447,9 +450,7 @@ class UserHandler extends DefaultHandler
                     /*********************FLEXIBLE WINDOW BASED COUNTING OF SNAPSHOTS**************************/
                     prevtokenend = flexWindowCountSnapshot(currentCPt, prevtokenend,minCPtProc,snapshot_flex_window_counted_outfile);
                     /*********************FIXED WINDOW BASED COUNTING OF SNAPSHOTS**************************/
-                    int temp_window = previous_window;
-                    previous_window = fixedWindowCountSnapshot(currentCPt,previous_window,minCPtProc,snapshot_fixed_window_counted_outfile);
-                    if (temp_window!=previous_window){
+                    if (fixedWindowCountSnapshot(currentCPt,windowsSeen,minCPtProc,snapshot_fixed_window_counted_outfile)){
                         markifcounted = true;
                     }
                     /********************writing to all-snapshots file (counted or not)**************************/
@@ -549,24 +550,25 @@ class UserHandler extends DefaultHandler
         }
         return prevtokenend;
     }
-    int fixedWindowCountSnapshot(ChangePoint currentCPt,int previous_window, int minCPtProc, String filename){
+    boolean fixedWindowCountSnapshot(ChangePoint currentCPt,HashSet<Integer> windowsSeen, int minCPtProc, String filename){
         /***Counting the snapshot only if its current-epsilon-based window is different from the previously detected snapshot********/
         //int cPtLvalue = currentCPt.getcPointTimestamp().getClock().get(1);
         int cPtvalue = currentCPt.getcPointTimestamp().getClock().get(0);
         //compute the current cut's window based on epsilon
         int current_cut_window=getWindow(cPtvalue,sysathand.GetEpsilon());
-        if((TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount==0)||(current_cut_window>previous_window))
+        if((TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount==0)||(!windowsSeen.contains(current_cut_window)))
         {
             TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount++;
-            previous_window=current_cut_window;
+            windowsSeen.add(current_cut_window);
             //System.out.println("Counted.");
             //if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1)
             {
                 /***************writing to snapshot_window_counted_outfile************************/
                 writeSnapshotToFile(minCPtProc,currentCPt,filename,TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount);
             }
+            return true;
         }
-        return previous_window;
+        return false;
     }
     void reportSnapshot(ChangePoint currentCPt, String filename, int minCPtProc, boolean markifcounted){
         TraceHLCTimestampingOfflineArithPredDet.snapshotcount++;
