@@ -6,19 +6,22 @@ import java.io.PrintWriter;
 import javax.xml.parsers.SAXParser;
 import javax.xml.parsers.SAXParserFactory;
 import org.xml.sax.Attributes;
+import org.xml.sax.Locator;
 import org.xml.sax.SAXException;
 import org.xml.sax.helpers.DefaultHandler;
 import java.util.*;
 
-public class TraceHLCTimestampingOfflineArithPredDet {
+public class TraceHLCTimestampingOfflineArithPredDet{
     static int snapshotcount=0;
     static int flex_window_snapshotcount=0;
     static int fixed_window_snapshotcount=0;
     static String inpfilename="";
     static int debugmode=0;
-    static int mode=0; //msg distribution mode
+    static int msgmode=0; //msg distribution mode
     static String clockmode="HLC";
     static float gamma = 0;//value by which right end point of the interval will be extended
+    static int intervDropFreq=0;
+    static int msgDropFreq=0;
     static String outputLocation = "";
     public static void main(String[] args)
     {
@@ -29,18 +32,13 @@ public class TraceHLCTimestampingOfflineArithPredDet {
                 System.exit(0);
             }
             debugmode = Integer.parseInt(args[0]); //debugmode==1 is printing mode, debugmode == 2 only prints changepoints and candidates
-            mode=Integer.parseInt(args[1]); //if 2-different-msg-distr-mode, anything else is normal msg distribution mode..
-            /*if(mode==2) {
-                System.out.println("Different message distribution mode");
-            } else if(mode==1) {
-                System.out.println("Intra group message distribution mode");
-            } else {
-                System.out.println("Normal message distribution mode");
-            }*/
+            msgmode=Integer.parseInt(args[1]);
             //setting gamma
             gamma = Float.parseFloat(args[2]);
-            inpfilename = args[3];
-            outputLocation = args[4];
+            intervDropFreq = Integer.parseInt(args[3]);
+            msgDropFreq = Integer.parseInt(args[4]);
+            inpfilename = args[5];
+            outputLocation = args[6];
             File inputFile = new File(inpfilename);
             SAXParserFactory factory = SAXParserFactory.newInstance();
             SAXParser saxParser = factory.newSAXParser();//create XML parser instance
@@ -56,6 +54,11 @@ public class TraceHLCTimestampingOfflineArithPredDet {
 }
 class UserHandler extends DefaultHandler
 {
+    private Locator locator;
+    public void setDocumentLocator( Locator locator )//code required to get the specific line number in the input xml trace file
+    {
+        this.locator = locator;
+    }
     boolean bmsender_time = false;
     boolean bmsgto = false;
     boolean bmsgfrom = false;
@@ -67,8 +70,9 @@ class UserHandler extends DefaultHandler
     int sender_time=-1;// variable to remember sender time for message RECEIVE
     int senderid=-1;// variable to remember sender id for message RECEIVE
     SysAtHand sysathand=new SysAtHand(); //object that accounts for epsilon and number of processes in current system
+    String fromVtoEndStr = TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(TraceHLCTimestampingOfflineArithPredDet.inpfilename.indexOf("_v")+2, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf(".xml"));
+    String intervalLengthStr=fromVtoEndStr.substring(0, fromVtoEndStr.indexOf('_'));
     Map<Integer, Process> mapofprocesses = new HashMap<Integer, Process>();//map of processes with process id as the key and Process instance as value
-    Vector<Double> rcv_probab; //declared but will be defined only if in "different-msg-distr-mode"
     HLC largestIntervalEnd;
     @Override
     public void startElement(String uri, String localName, String qName, Attributes attributes) throws SAXException
@@ -87,17 +91,12 @@ class UserHandler extends DefaultHandler
             //System.out.println("System: epsilon=" + eps + ", number_of_processes=" +nproc);
             sysathand.SetEpsilon(eps);
             sysathand.SetNumberOfProcesses(nproc);
-
+            sysathand.setInterval_length(Integer.parseInt(intervalLengthStr));
             //setting gamma to epsilon if the provided value is positive
             if(TraceHLCTimestampingOfflineArithPredDet.gamma > 0){
                 TraceHLCTimestampingOfflineArithPredDet.gamma = (int)Math.floor(sysathand.GetEpsilon() * TraceHLCTimestampingOfflineArithPredDet.gamma);
-            }
-            else {
+            } else {
                 //use 0 as gamma value
-            }
-            if((TraceHLCTimestampingOfflineArithPredDet.mode==1)||(TraceHLCTimestampingOfflineArithPredDet.mode==2))
-            {
-                rcv_probab=new Vector<Double>(nproc);
             }
             //create nproc number of instances of class process and assign ids to them
             for (int i=0; i<nproc; i++)
@@ -113,13 +112,6 @@ class UserHandler extends DefaultHandler
                 }
                 Process proc = new Process(i,nwclock);
                 mapofprocesses.put(i,proc);
-                if((TraceHLCTimestampingOfflineArithPredDet.mode==1)||(TraceHLCTimestampingOfflineArithPredDet.mode==2)){
-                    if(i<nproc/2) {
-                        rcv_probab.add(0.5);
-                    } else {
-                        rcv_probab.add(1.0);
-                    }
-                }
             }
             //variable to keep track of the largest know HLC timestamp -- needed to bound
             //epsilon extension of last change-points at processes
@@ -195,18 +187,26 @@ class UserHandler extends DefaultHandler
                 nwclock2.setClockPlusValue((int)TraceHLCTimestampingOfflineArithPredDet.gamma);
                 if(value.equals("true"))
                 {
-                    if(proc.getAcceptInterval()==0){
+                    if(proc.getAcceptInterval()==0 || proc.getProcOldClock().getClock().elementAt(0)-proc.getLastAcceptedStartPt()< sysathand.getInterval_length()){
                         //this was used for an earlier implementation where intervals were
                         //reported as pairs of end-points and intervals during which the value of the local variable "x"
                         //at a process was true were also referred to as true-intervals were reported as "Candidates"
                         //add candidate to process queue
+                        if(nwclock1.getClock().elementAt(1)==908 && proc.getId()==0){
+                            System.out.println(locator.getLineNumber());
+                        }
                         proc.newCandidateOccurance(nwclock1,nwclock2);
                         //add change-points to process queue
                         proc.newChangePoint(nwclock1,1,1);
                         proc.newChangePoint(nwclock2,-1,1);
-                        proc.setAcceptInterval(1);
+                        proc.setLastAcceptedStartPt(proc.getProcOldClock().getClock().elementAt(0));//remember last accepted interval
+                        proc.setAcceptInterval(TraceHLCTimestampingOfflineArithPredDet.intervDropFreq);
                     } else{
-                        proc.setAcceptInterval(0);
+                        if(proc.getProcOldClock().getClock().elementAt(0)-proc.getLastIgnoredStartPt()> sysathand.getInterval_length()) {
+                            proc.setAcceptInterval(proc.getAcceptInterval() - 1);
+                            proc.setLastIgnoredStartPt(proc.getProcOldClock().getClock().elementAt(0));
+                            //remember last ignored interval
+                        }//if current interval is within interval_length of previously ignored interval then its not counted
                     }
                 }
                 /* //uncomment the else part when you have the implementation for processing arithmetic intervals ready
@@ -291,18 +291,15 @@ class UserHandler extends DefaultHandler
             //update clock using that max
             Process proc= mapofprocesses.get(proc_id);
             boolean toss;
-            if((TraceHLCTimestampingOfflineArithPredDet.mode==1) && ((proc_id<5 && senderid>=5)||(proc_id>=5 && senderid<5)))//cross group communication in the case of mode 1
-            {
-                toss=false;
-            }
-            else if((TraceHLCTimestampingOfflineArithPredDet.mode==2)|| (TraceHLCTimestampingOfflineArithPredDet.mode==1))// intra group communication in mode 1 OR mode 2
-            {
-                //System.out.println("rcv_probab at p"+proc_id+" : "+rcv_probab.get(proc_id));
-                int rangeend=(int) (1/rcv_probab.get(proc_id)); //2 if probab is 0.5, and 1 otherwise
-                toss= new Random().nextInt(rangeend)==0; //
-            }
-            else
-            {
+            if(TraceHLCTimestampingOfflineArithPredDet.msgmode==2){
+                if(proc.getIgnoredMsgCnt()==0){
+                    toss=true; //accept the message
+                    proc.setIgnoredMsgCnt(TraceHLCTimestampingOfflineArithPredDet.msgDropFreq);
+                } else {
+                    toss=false; //ignore the message
+                    proc.setIgnoredMsgCnt(proc.getIgnoredMsgCnt()-1);
+                }
+            } else {
                 toss=true; // every process receives every message from any other process
             }
             if((proc_id!=senderid) && (toss))//based on senderid and on receiver-probability--- if in different msg distribution mode			
@@ -314,9 +311,7 @@ class UserHandler extends DefaultHandler
                 proc.updateClockMessageRceive(receiver_time, correspSendClk.getMsgClock());
 
                 mapofprocesses.put(proc_id,proc);//update the process instance in the map corresponding the key-process id
-            }
-            else
-            {
+            } else {
                 if(proc_id!=senderid) // case where it chose to ignore msg based on probability
                 {
                     // to pop corresponding sender info from its queue
