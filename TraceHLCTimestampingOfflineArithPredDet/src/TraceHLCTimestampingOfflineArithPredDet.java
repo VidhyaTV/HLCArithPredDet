@@ -11,7 +11,7 @@ import org.xml.sax.SAXException;
 import org.xml.sax.helpers.DefaultHandler;
 import java.util.*;
 
-public class TraceHLCTimestampingOfflineArithPredDet{
+public class TraceHLCTimestampingOfflineArithPredDet {
     static int snapshotcount=0;
     static int flex_window_snapshotcount=0;
     static int fixed_window_snapshotcount=0;
@@ -20,9 +20,10 @@ public class TraceHLCTimestampingOfflineArithPredDet{
     static int msgmode=0; //msg distribution mode
     static String clockmode="HLC";
     static float gamma = 0;//value by which right end point of the interval will be extended
-    static int intervDropFreq=0;
+	static int intervDropFreq=0;
     static int msgDropFreq=0;
     static String outputLocation = "";
+    static String backslash="\\";
     public static void main(String[] args)
     {
         try
@@ -32,14 +33,19 @@ public class TraceHLCTimestampingOfflineArithPredDet{
                 System.exit(0);
             }
             debugmode = Integer.parseInt(args[0]); //debugmode==1 is printing mode, debugmode == 2 only prints changepoints and candidates
-            msgmode=Integer.parseInt(args[1]);
+            msgmode=Integer.parseInt(args[1]); //if 2-different-msg-distr-mode, anything else is normal msg distribution mode..
             //setting gamma
             gamma = Float.parseFloat(args[2]);
             intervDropFreq = Integer.parseInt(args[3]);
             msgDropFreq = Integer.parseInt(args[4]);
             inpfilename = args[5];
             outputLocation = args[6];
-            File inputFile = new File(inpfilename);
+            File inputFile = new File(inpfilename);			
+			if(System.getProperty("os.name").toLowerCase().indexOf("win") >= 0){
+				backslash="\\";
+			} else {
+				backslash="/";
+			}
             SAXParserFactory factory = SAXParserFactory.newInstance();
             SAXParser saxParser = factory.newSAXParser();//create XML parser instance
             UserHandler userhandler = new UserHandler();
@@ -54,11 +60,11 @@ public class TraceHLCTimestampingOfflineArithPredDet{
 }
 class UserHandler extends DefaultHandler
 {
-    private Locator locator;
-    public void setDocumentLocator( Locator locator )//code required to get the specific line number in the input xml trace file
-    {
-        this.locator = locator;
-    }
+	private Locator locator;
+	public void setDocumentLocator( Locator locator )
+	{
+	this.locator = locator;
+	}
     boolean bmsender_time = false;
     boolean bmsgto = false;
     boolean bmsgfrom = false;
@@ -70,7 +76,7 @@ class UserHandler extends DefaultHandler
     int sender_time=-1;// variable to remember sender time for message RECEIVE
     int senderid=-1;// variable to remember sender id for message RECEIVE
     SysAtHand sysathand=new SysAtHand(); //object that accounts for epsilon and number of processes in current system
-    String fromVtoEndStr = TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(TraceHLCTimestampingOfflineArithPredDet.inpfilename.indexOf("_v")+2, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf(".xml"));
+	String fromVtoEndStr = TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(TraceHLCTimestampingOfflineArithPredDet.inpfilename.indexOf("_v")+2, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf(".xml"));
     String intervalLengthStr=fromVtoEndStr.substring(0, fromVtoEndStr.indexOf('_'));
     Map<Integer, Process> mapofprocesses = new HashMap<Integer, Process>();//map of processes with process id as the key and Process instance as value
     HLC largestIntervalEnd;
@@ -91,11 +97,12 @@ class UserHandler extends DefaultHandler
             //System.out.println("System: epsilon=" + eps + ", number_of_processes=" +nproc);
             sysathand.SetEpsilon(eps);
             sysathand.SetNumberOfProcesses(nproc);
-            sysathand.setInterval_length(Integer.parseInt(intervalLengthStr));
+			sysathand.setInterval_length(Integer.parseInt(intervalLengthStr));
             //setting gamma to epsilon if the provided value is positive
             if(TraceHLCTimestampingOfflineArithPredDet.gamma > 0){
                 TraceHLCTimestampingOfflineArithPredDet.gamma = (int)Math.floor(sysathand.GetEpsilon() * TraceHLCTimestampingOfflineArithPredDet.gamma);
-            } else {
+            }
+            else {
                 //use 0 as gamma value
             }
             //create nproc number of instances of class process and assign ids to them
@@ -111,7 +118,7 @@ class UserHandler extends DefaultHandler
                     nwclock=new HLC(hlcvector);
                 }
                 Process proc = new Process(i,nwclock);
-                mapofprocesses.put(i,proc);
+                mapofprocesses.put(i,proc);               
             }
             //variable to keep track of the largest know HLC timestamp -- needed to bound
             //epsilon extension of last change-points at processes
@@ -187,19 +194,16 @@ class UserHandler extends DefaultHandler
                 nwclock2.setClockPlusValue((int)TraceHLCTimestampingOfflineArithPredDet.gamma);
                 if(value.equals("true"))
                 {
-                    if(proc.getAcceptInterval()==0 || proc.getProcOldClock().getClock().elementAt(0)-proc.getLastAcceptedStartPt()< sysathand.getInterval_length()){
+                    if(proc.getAcceptInterval()==0|| proc.getProcOldClock().getClock().elementAt(0)-proc.getLastAcceptedStartPt()< sysathand.getInterval_length()){
                         //this was used for an earlier implementation where intervals were
                         //reported as pairs of end-points and intervals during which the value of the local variable "x"
                         //at a process was true were also referred to as true-intervals were reported as "Candidates"
                         //add candidate to process queue
-                        if(nwclock1.getClock().elementAt(1)==908 && proc.getId()==0){
-                            System.out.println(locator.getLineNumber());
-                        }
                         proc.newCandidateOccurance(nwclock1,nwclock2);
                         //add change-points to process queue
                         proc.newChangePoint(nwclock1,1,1);
                         proc.newChangePoint(nwclock2,-1,1);
-                        proc.setLastAcceptedStartPt(proc.getProcOldClock().getClock().elementAt(0));//remember last accepted interval
+						proc.setLastAcceptedStartPt(proc.getProcOldClock().getClock().elementAt(0));//remember last accepted interval
                         proc.setAcceptInterval(TraceHLCTimestampingOfflineArithPredDet.intervDropFreq);
                     } else{
                         if(proc.getProcOldClock().getClock().elementAt(0)-proc.getLastIgnoredStartPt()> sysathand.getInterval_length()) {
@@ -291,7 +295,7 @@ class UserHandler extends DefaultHandler
             //update clock using that max
             Process proc= mapofprocesses.get(proc_id);
             boolean toss;
-            if(TraceHLCTimestampingOfflineArithPredDet.msgmode==2){
+			if(TraceHLCTimestampingOfflineArithPredDet.msgmode==2){
                 if(proc.getIgnoredMsgCnt()==0){
                     toss=true; //accept the message
                     proc.setIgnoredMsgCnt(TraceHLCTimestampingOfflineArithPredDet.msgDropFreq);
@@ -311,7 +315,9 @@ class UserHandler extends DefaultHandler
                 proc.updateClockMessageRceive(receiver_time, correspSendClk.getMsgClock());
 
                 mapofprocesses.put(proc_id,proc);//update the process instance in the map corresponding the key-process id
-            } else {
+            }
+            else
+            {
                 if(proc_id!=senderid) // case where it chose to ignore msg based on probability
                 {
                     // to pop corresponding sender info from its queue
@@ -338,7 +344,7 @@ class UserHandler extends DefaultHandler
             Process proc= mapofprocesses.get(proc_id);
 
             //no need to update clocks if bmisc because the clock was already updated at message send/recieve which actually caused this interval end point
-            if(!bmisc)
+            //if(!bmisc)//some intervals marked as "splitduetocommunication" happen to exist in the traces - so update clock for all types of intervals
             {
                 proc.updateClockLocalOrSengMsg(end_time,false);
                 mapofprocesses.put(proc_id,proc);
@@ -361,17 +367,17 @@ class UserHandler extends DefaultHandler
         HashSet<Integer> windowsSeen = new HashSet<Integer>();
         //get the text between last backslash and .xml
         String folderName = TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf('/')+1, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf(".xml"));
-        String nwfolder=TraceHLCTimestampingOfflineArithPredDet.outputLocation+"\\"+folderName; //input file name without file extension
+        String nwfolder=TraceHLCTimestampingOfflineArithPredDet.outputLocation+TraceHLCTimestampingOfflineArithPredDet.backslash+folderName; //input file name without file extension
         //For debugging purposes
         /*****************print all candidates and changepoints of all the processes before preprocessing***************/
         if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
             String snapshot_cand_file="",snapshot_cpt_file="";
             if(TraceHLCTimestampingOfflineArithPredDet.gamma==0){
-                snapshot_cand_file = nwfolder + "\\before_candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
-                snapshot_cpt_file = nwfolder + "\\before_changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
+                snapshot_cand_file = nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+ "before_candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
+                snapshot_cpt_file = nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+ "before_changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
             } else {
-                snapshot_cand_file = nwfolder + "\\before_candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
-                snapshot_cpt_file = nwfolder + "\\before_changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
+                snapshot_cand_file = nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+ "before_candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
+                snapshot_cpt_file = nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+ "before_changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
             }
             printCandidatesForAllProc(snapshot_cand_file);
             printChangepointsForAllProc(snapshot_cpt_file);
@@ -385,11 +391,11 @@ class UserHandler extends DefaultHandler
         if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
             String snapshot_cand_file="",snapshot_cpt_file="";
             if(TraceHLCTimestampingOfflineArithPredDet.gamma==0){
-                snapshot_cand_file = nwfolder + "\\candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode +".txt";
-                snapshot_cpt_file = nwfolder + "\\changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode +".txt";
+                snapshot_cand_file = nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+ "candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode +".txt";
+                snapshot_cpt_file = nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+ "changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode +".txt";
             } else {
-                snapshot_cand_file = nwfolder + "\\candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
-                snapshot_cpt_file = nwfolder + "\\changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
+                snapshot_cand_file = nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+ "candidates" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
+                snapshot_cpt_file = nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+ "changepoints" + TraceHLCTimestampingOfflineArithPredDet.clockmode + "_gamma" + (int) TraceHLCTimestampingOfflineArithPredDet.gamma + ".txt";
             }
             printCandidatesForAllProc(snapshot_cand_file);
             printChangepointsForAllProc(snapshot_cpt_file);
@@ -426,13 +432,13 @@ class UserHandler extends DefaultHandler
                     //if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
                         //********************************creating needed files and folders reporting*******************************
                         if(TraceHLCTimestampingOfflineArithPredDet.gamma==0){
-                            snapshot_outfile=nwfolder+"\\snapshots_clk_"+TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
-                            snapshot_flex_window_counted_outfile=nwfolder+"\\snapshots_flex_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
-                            snapshot_fixed_window_counted_outfile=nwfolder+"\\snapshots_fixed_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
+                            snapshot_outfile=nwfolder+TraceHLCTimestampingOfflineArithPredDet.backslash+ "snapshots_clk_"+TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
+                            snapshot_flex_window_counted_outfile=nwfolder+TraceHLCTimestampingOfflineArithPredDet.backslash+ "snapshots_flex_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
+                            snapshot_fixed_window_counted_outfile=nwfolder+TraceHLCTimestampingOfflineArithPredDet.backslash+ "snapshots_fixed_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+".txt";
                         } else {
-                            snapshot_outfile=nwfolder+"\\snapshots_clk_"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_gamma"+(int)TraceHLCTimestampingOfflineArithPredDet.gamma+".txt";
-                            snapshot_flex_window_counted_outfile=nwfolder+"\\snapshots_flex_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_gamma"+(int)TraceHLCTimestampingOfflineArithPredDet.gamma+".txt";
-                            snapshot_fixed_window_counted_outfile=nwfolder+"\\snapshots_fixed_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_gamma"+(int)TraceHLCTimestampingOfflineArithPredDet.gamma+".txt";
+                            snapshot_outfile=nwfolder+TraceHLCTimestampingOfflineArithPredDet.backslash+ "snapshots_clk_"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_gamma"+(int)TraceHLCTimestampingOfflineArithPredDet.gamma+".txt";
+                            snapshot_flex_window_counted_outfile=nwfolder+TraceHLCTimestampingOfflineArithPredDet.backslash+ "snapshots_flex_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_gamma"+(int)TraceHLCTimestampingOfflineArithPredDet.gamma+".txt";
+                            snapshot_fixed_window_counted_outfile=nwfolder+TraceHLCTimestampingOfflineArithPredDet.backslash+ "snapshots_fixed_window_counted_clk"+TraceHLCTimestampingOfflineArithPredDet.clockmode+"_gamma"+(int)TraceHLCTimestampingOfflineArithPredDet.gamma+".txt";
                         }
                         //Create folder and files only if it is the first time
                         if(TraceHLCTimestampingOfflineArithPredDet.snapshotcount==0){ //when the first cut gets detected clean the snapshots file if one already exists

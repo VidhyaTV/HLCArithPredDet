@@ -21,7 +21,7 @@ class Process
 
     Deque<ChangePoint> cPointQueue;
     //variable to help ignore true intervals at a specific frequency
-    int acceptInterval;
+    int acceptInterval;	
     int lastAcceptedStartPt;
     int lastIgnoredStartPt;
     int ignoredMsgCnt;
@@ -44,7 +44,7 @@ class Process
         candQueue= new ArrayDeque<Candidate>();
         cPointQueue= new ArrayDeque<ChangePoint>();
         lastsendorrecorlocevntpt=-1;
-        acceptInterval=0;
+		acceptInterval=0;
         lastAcceptedStartPt=0;
         lastIgnoredStartPt=0;
         ignoredMsgCnt=0;
@@ -55,8 +55,8 @@ class Process
     void setProcOldClock(Clock passed_clock){prev_clock.setClock(passed_clock.getClock());}
     void setlastsendorrecorlocevntpt(int sendreclocventpt){lastsendorrecorlocevntpt=sendreclocventpt;}
     void setAcceptInterval(int value){acceptInterval=value;}
-    void setLastAcceptedStartPt(int startPt){lastAcceptedStartPt=startPt;}
-    void setLastIgnoredStartPt(int startPt){lastIgnoredStartPt=startPt;}
+	void setLastAcceptedStartPt(int startPt){lastAcceptedStartPt=startPt;}
+    void setLastIgnoredStartPt(int startPt){lastIgnoredStartPt=startPt;}	
     void setIgnoredMsgCnt(int cnt){ignoredMsgCnt=cnt;}
     int getIgnoredMsgCnt(){return ignoredMsgCnt;}
     int getLastIgnoredStartPt(){return lastIgnoredStartPt;}
@@ -99,6 +99,7 @@ class Process
         //set the front candidate in my queue as my representative in Token--will be done at the method that called this method
         return candQueue.peekFirst();
     }
+
     Candidate newCandidateOccurance(Clock intervalstart, Clock intervalend)
     {
         Candidate newCand= new Candidate(intervalstart, intervalend);
