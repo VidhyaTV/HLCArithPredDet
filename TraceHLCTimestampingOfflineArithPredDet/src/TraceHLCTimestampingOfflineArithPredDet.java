@@ -80,6 +80,12 @@ class UserHandler extends DefaultHandler
     String intervalLengthStr=fromVtoEndStr.substring(0, fromVtoEndStr.indexOf('_'));
     Map<Integer, Process> mapofprocesses = new HashMap<Integer, Process>();//map of processes with process id as the key and Process instance as value
     HLC largestIntervalEnd;
+    Set<String> variableNameSet = new HashSet<String>();//variable to keep track of the variables defining the local state
+    //variables for printing z3 constraints for intervals
+    String intervalConstraint="";
+    int bracesCount=0;
+    String folderName = TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf('/')+1, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf(".xml"));
+    String nwfolder=TraceHLCTimestampingOfflineArithPredDet.outputLocation+TraceHLCTimestampingOfflineArithPredDet.backslash+folderName; //input file name without file extension
     @Override
     public void startElement(String uri, String localName, String qName, Attributes attributes) throws SAXException
     {
@@ -219,6 +225,32 @@ class UserHandler extends DefaultHandler
                     proc.newChangePoint(nwclock2,-1,0);
                 }
                  */
+                //write constraints to appropriate file
+                try
+                {
+                    //print z3 constraint
+                    String variablename=""+name+"_"+proc_id+"";
+                    if(!variableNameSet.contains(variablename))//if variable was not declared already
+                    {
+                        //assuming variables are either boolean or integers starting with initial value 0
+                        if(value.equalsIgnoreCase("true")||value.equalsIgnoreCase("false")){
+                            intervalConstraint="(declare-const "+variablename+" Bool)\n";
+                        } else if(value.equalsIgnoreCase("0")) {//provide whatever the initial value of that integer variable would be
+                            intervalConstraint="(declare-const "+variablename+" Int)\n";
+                        } else {
+                            System.out.println("Scanned value was neither boolean or integer\n");
+                            System.exit(0);
+                        }
+                        variableNameSet.add(variablename);
+                    }
+                    intervalConstraint=intervalConstraint+"(assert (=> (and (<= ((HIGHESTC*"+proc.getProcOldClock().getClock().elementAt(1)+")+"+proc.getProcOldClock().getClock().elementAt(2)+") l"+proc_id+") (< l"+ proc_id +" ((HIGHESTC*"+proc.getProcClock().getClock().elementAt(1)+")+"+proc.getProcClock().getClock().elementAt(2)+")))(and (= "+variablename+" "+value+") ";
+                    bracesCount++;
+                    //System.out.println("End Element :" + qName+"\n");
+                }
+                catch (Exception e)
+                {
+                    e.printStackTrace();
+                }
                 mapofprocesses.put(proc_id,proc);
             }
         }
@@ -245,7 +277,35 @@ class UserHandler extends DefaultHandler
         }
         else if(qName.equalsIgnoreCase("interval"))
         {
-
+            Process proc= mapofprocesses.get(proc_id);
+            intervalConstraint=intervalConstraint+" true";
+            while(bracesCount>0)
+            {
+                intervalConstraint=intervalConstraint+")";
+                bracesCount--;
+            }
+            intervalConstraint=intervalConstraint+"))\n";
+            //compute files/filenames to write to
+            //window corresponding to left endpoint/changepoint - windows are defined based on physical time - because snapshots are counted based on physical-time-defined windows
+            int lWindow= (proc.getProcOldClock().getClock().elementAt(0)/sysathand.GetEpsilon())* sysathand.GetEpsilon();
+            //window corresponding to right endpoint/changepoint
+            int rWindow= (proc.getProcClock().getClock().elementAt(0)/sysathand.GetEpsilon())* sysathand.GetEpsilon();
+            //for each window from lWindow to rWindow
+            for(int windowStart=lWindow; windowStart<=rWindow; windowStart=windowStart+sysathand.GetEpsilon()){
+                //compute the two files corresponding to the window
+                String file1Name, file2Name;
+                //write constraints to both files
+                //print z3 constraint
+                file1Name="constraints_"+windowStart+"to"+(windowStart+(sysathand.GetEpsilon()*2)+".smt2");
+                appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+file1Name,intervalConstraint);
+                if(windowStart>=sysathand.GetEpsilon()) {
+                    file2Name="constraints_"+(windowStart-sysathand.GetEpsilon())+"to"+(windowStart+sysathand.GetEpsilon()+".smt2");
+                    appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+file2Name,intervalConstraint);
+                }
+            }
+            intervalConstraint="";
+            proc_id=-1;
+            //System.out.println("End Element :" + qName+"\n");
         }
         else if(qName.equalsIgnoreCase("system_run"))
         {
@@ -256,14 +316,11 @@ class UserHandler extends DefaultHandler
     @Override
     public void characters(char ch[], int start, int length) throws SAXException
     {
-        if (bmsender_time)
-        {
+        if (bmsender_time) {
             sender_time=Integer.parseInt(new String(ch, start, length));
             //System.out.println("Sender time: "+ sender_time);
             bmsender_time = false;
-        }
-        else if (bmsgto)
-        {
+        } else if (bmsgto) {
             int msgto=Integer.parseInt(new String(ch, start, length));
             //System.out.println("Message to: " + msgto);
             Process proc= mapofprocesses.get(proc_id);
@@ -280,15 +337,11 @@ class UserHandler extends DefaultHandler
             sender_time=-1;
             //System.out.println("Clock updated after message send, l="+ proc.getL()+",c="+proc.getC());
             bmsgto = false;
-        }
-        else if (bmsgfrom)
-        {
+        } else if (bmsgfrom) {
             senderid=Integer.parseInt(new String(ch, start, length));
             //System.out.println("Message from: " +senderid );
             bmsgfrom = false;
-        }
-        else if (bmreceiver_time)
-        {
+        } else if (bmreceiver_time) {
             int receiver_time=Integer.parseInt(new String(ch, start, length));
             //System.out.println("Receiver time: " + receiver_time);
             //get max of sendertime,receiver_time
@@ -306,20 +359,22 @@ class UserHandler extends DefaultHandler
             } else {
                 toss=true; // every process receives every message from any other process
             }
-            if((proc_id!=senderid) && (toss))//based on senderid and on receiver-probability--- if in different msg distribution mode			
-            {
+            if((proc_id!=senderid) && (toss)) {//based on senderid and on receiver-probability--- if in different msg distribution mode
                 //get sender l,c by popping sender's dequeue
                 Process senderproc= mapofprocesses.get(senderid);
                 MessageSendStruct correspSendClk = senderproc.getClockfromQueue(sender_time);
-
                 proc.updateClockMessageRceive(receiver_time, correspSendClk.getMsgClock());
-
                 mapofprocesses.put(proc_id,proc);//update the process instance in the map corresponding the key-process id
-            }
-            else
-            {
-                if(proc_id!=senderid) // case where it chose to ignore msg based on probability
-                {
+                String msgConstraint=("(assert (=> (>= l"+proc_id+" ((HIGHESTC*"+proc.getProcClock().getClock().elementAt(1)+")+"+proc.getProcClock().getClock().elementAt(2)+")) (not (<= l"+ senderid +" ((HIGHESTC*"+correspSendClk.getMsgClock().getClock().elementAt(1)+")+"+correspSendClk.getMsgClock().getClock().elementAt(2)+")))))\n");
+                int windowStart=(proc.getProcClock().getClock().elementAt(0)/sysathand.GetEpsilon())* sysathand.GetEpsilon();
+                String file1Name="constraints_"+windowStart+"to"+(windowStart+(sysathand.GetEpsilon()*2)+".smt2");
+                appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+file1Name, msgConstraint);
+                if(windowStart>=sysathand.GetEpsilon()) {
+                    String file2Name="constraints_"+(windowStart-sysathand.GetEpsilon())+"to"+(windowStart+sysathand.GetEpsilon()+".smt2");
+                    appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+file2Name, msgConstraint);
+                }
+            } else {
+                if(proc_id!=senderid) { // case where it chose to ignore msg based on messgeacceptfrequency
                     // to pop corresponding sender info from its queue
                     Process senderproc= mapofprocesses.get(senderid);//get sender l,c by popping sender's dequeue
                     MessageSendStruct correspSendLC = senderproc.getClockfromQueue(sender_time);
@@ -331,18 +386,13 @@ class UserHandler extends DefaultHandler
             proc_id=-1;
             sender_time=-1;
             senderid=-1;
-        }
-        else if (bstart_time)
-        {
+        } else if (bstart_time) {
             //System.out.println("Interval start time: "+ new String(ch, start, length));
             bstart_time = false;
-        }
-        else if (bend_time)
-        {
+        } else if (bend_time) {
             int end_time=Integer.parseInt(new String(ch, start, length));
             //System.out.println("Interval end time: " + end_time);
             Process proc= mapofprocesses.get(proc_id);
-
             //no need to update clocks if bmisc because the clock was already updated at message send/recieve which actually caused this interval end point
             //if(!bmisc)//some intervals marked as "splitduetocommunication" happen to exist in the traces - so update clock for all types of intervals
             {
@@ -351,9 +401,7 @@ class UserHandler extends DefaultHandler
             }
             bmisc = false;
             bend_time = false;
-        }
-        else if (bmisc)
-        {
+        } else if (bmisc) {
             //System.out.println("misc: " + new String(ch, start, length));
         }
     }
