@@ -18,8 +18,8 @@ class Process
     //queue to remember values corresponding to message sends
     Deque<MessageSendStruct> log;
     int msg_counter;
-
     Deque<ChangePoint> cPointQueue;
+    Deque<ChangePoint> cPointQueueNextBatch;
     //variable to help ignore true intervals at a specific frequency
     int acceptInterval;	
     int lastAcceptedStartPt;
@@ -43,6 +43,7 @@ class Process
         log = new ArrayDeque<MessageSendStruct>();
         candQueue= new ArrayDeque<Candidate>();
         cPointQueue= new ArrayDeque<ChangePoint>();
+        cPointQueueNextBatch= new ArrayDeque<ChangePoint>();
         lastsendorrecorlocevntpt=-1;
 		acceptInterval=0;
         lastAcceptedStartPt=0;
@@ -65,14 +66,11 @@ class Process
     int getId(){return id;}
     Clock getProcClock(){return clock;}
     Clock getProcOldClock(){return prev_clock;}
-
     int getlastsendorrecorlocevntpt(){return lastsendorrecorlocevntpt;}
-
     Deque<Candidate> getCandQueue()
     {
         return candQueue;
     }
-
     void setCandQueue(Deque<Candidate> updatedQueue)
     {
         candQueue=updatedQueue;
@@ -81,12 +79,14 @@ class Process
     {
         return cPointQueue;
     }
-
+    Deque<ChangePoint> getCPtQueueNextBatch()
+    {
+        return cPointQueueNextBatch;
+    }
     void setCPtQueue(Deque<ChangePoint> updatedQueue)
     {
         cPointQueue=updatedQueue;
     }
-
     //clear queue method at a process - given time x --CLEARQUEUE
     Candidate clearQueueTill(Clock tillend)
     {
@@ -99,7 +99,6 @@ class Process
         //set the front candidate in my queue as my representative in Token--will be done at the method that called this method
         return candQueue.peekFirst();
     }
-
     Candidate newCandidateOccurance(Clock intervalstart, Clock intervalend)
     {
         Candidate newCand= new Candidate(intervalstart, intervalend);
@@ -121,10 +120,23 @@ class Process
         }
         return newCand;
     }
-    void newChangePoint(Clock cPtTime, int endPtIdentifier, int value)
+    //0- add to process' current batch's changepoint queue
+    //1- add to process' next batch's changepoint queue
+    //2- add to process' both batchs' changepoint queue
+    void newChangePoint(Clock cPtTime, int endPtIdentifier, int value, int whichQueues)
     {
         ChangePoint newCPt= new ChangePoint(cPtTime, endPtIdentifier, value);
-        cPointQueue.add(newCPt);
+        if(whichQueues==0){
+            cPointQueue.add(newCPt);
+        } else if (whichQueues==1) {
+            cPointQueueNextBatch.add(newCPt);
+        } else if (whichQueues==2){
+            cPointQueueNextBatch.add(newCPt);
+            cPointQueue.add(newCPt);
+        } else {
+            System.out.println("Invalid option for changepoint queues.");
+            System.exit(0);
+        }
         if(TraceHLCTimestampingOfflineArithPredDet.debugmode==2)
         {
             //JUST FOR DEBUGGING
@@ -141,7 +153,7 @@ class Process
             }
         }
     }
-    void updateClockLocalOrSengMsg(int physicalTime, boolean sendmsg)
+    void updateClockLocalOrSendMsg(int physicalTime, boolean sendmsg)
     {
         if(lastsendorrecorlocevntpt!=physicalTime)//if a message send/receive did not happen at the same instant update old pt - otherwise don't because old pt is required for interval reporting
         {//pt is also same-still update old_value
@@ -326,6 +338,12 @@ class Process
             cPointQueue.add(first);
             cPointQueue.add(second);
         }
+    }
+    void clearCurrentChangePointQ(){
+        cPointQueue.clear();
+    }
+    void clearNextChangePointQ(){
+        cPointQueueNextBatch.clear();
     }
     Deque<ChangePoint> cleanUpChangePtQ(){
         Deque<ChangePoint> cleansedQ = new ArrayDeque<ChangePoint>();

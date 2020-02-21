@@ -24,6 +24,9 @@ public class TraceHLCTimestampingOfflineArithPredDet {
     static int msgDropFreq=0;
     static String outputLocation = "";
     static String backslash="\\";
+    static boolean HLCplusEpsPlusSMT;
+    static int batchlength=0;
+    static int runupto=0;
     public static void main(String[] args)
     {
         try
@@ -40,6 +43,9 @@ public class TraceHLCTimestampingOfflineArithPredDet {
             msgDropFreq = Integer.parseInt(args[4]);
             inpfilename = args[5];
             outputLocation = args[6];
+            batchlength=10000;
+            runupto=1000000;
+            HLCplusEpsPlusSMT=true;
             File inputFile = new File(inpfilename);			
 			if(System.getProperty("os.name").toLowerCase().indexOf("win") >= 0){
 				backslash="\\";
@@ -86,6 +92,8 @@ class UserHandler extends DefaultHandler
     int bracesCount=0;
     String folderName = TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf('/')+1, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf(".xml"));
     String nwfolder=TraceHLCTimestampingOfflineArithPredDet.outputLocation+TraceHLCTimestampingOfflineArithPredDet.backslash+folderName; //input file name without file extension
+    int lastProcessedBatchPt=0, highestSeenCInBatch=0;//????????????????????FINISH implementation for each!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    Set<Integer> ProcsCrossedBatchEnd=new HashSet<Integer>();
     @Override
     public void startElement(String uri, String localName, String qName, Attributes attributes) throws SAXException
     {
@@ -171,8 +179,7 @@ class UserHandler extends DefaultHandler
             String old_value = attributes.getValue("old_value");
             Process proc= mapofprocesses.get(proc_id);
             //create separate version of clocks for the candidate
-            Clock nwclock1=new Clock();
-            Clock nwclock2=new Clock();
+            Clock nwclock1, nwclock2;
             if(TraceHLCTimestampingOfflineArithPredDet.clockmode.equals("HLC"))
             {
                 Vector<Integer> hlcvector1=new Vector<Integer>();
@@ -206,10 +213,27 @@ class UserHandler extends DefaultHandler
                         //at a process was true were also referred to as true-intervals were reported as "Candidates"
                         //add candidate to process queue
                         proc.newCandidateOccurance(nwclock1,nwclock2);
-                        //add change-points to process queue
-                        proc.newChangePoint(nwclock1,1,1);
-                        proc.newChangePoint(nwclock2,-1,1);
-						proc.setLastAcceptedStartPt(proc.getProcOldClock().getClock().elementAt(0));//remember last accepted interval
+                        //add change-points to process-queues - current and next appropriately
+                        //if right endpoint/changepoint is beyond the end of current batch
+                        //and left endpoint/changepoint is within end of current batch
+                        int whichQueues;
+                        if(!TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT){
+                            whichQueues=0;
+                        } else {
+                            if ((lastProcessedBatchPt+TraceHLCTimestampingOfflineArithPredDet.batchlength>proc.getProcClock().getClock().elementAt(0))&&(lastProcessedBatchPt+TraceHLCTimestampingOfflineArithPredDet.batchlength>proc.getProcOldClock().getClock().elementAt(0))){
+                                //add changepoints to current batch's changepoint queue
+                                whichQueues=0;
+                            } else if((lastProcessedBatchPt+TraceHLCTimestampingOfflineArithPredDet.batchlength+sysathand.GetEpsilon()<proc.getProcClock().getClock().elementAt(0))&&(lastProcessedBatchPt+TraceHLCTimestampingOfflineArithPredDet.batchlength+sysathand.GetEpsilon()<proc.getProcOldClock().getClock().elementAt(0))){
+                                //add changepoints to next batch's changepoint queue
+                                whichQueues=1;
+                            } else {
+                                //add to both current and next batch's changepoint queue
+                                whichQueues=2;
+                            }
+                        }
+                        proc.newChangePoint(nwclock1,1,1, whichQueues);
+                        proc.newChangePoint(nwclock2,-1,1, whichQueues);
+                        proc.setLastAcceptedStartPt(proc.getProcOldClock().getClock().elementAt(0));//remember last accepted interval
                         proc.setAcceptInterval(TraceHLCTimestampingOfflineArithPredDet.intervDropFreq);
                     } else{
                         if(proc.getProcOldClock().getClock().elementAt(0)-proc.getLastIgnoredStartPt()> sysathand.getInterval_length()) {
@@ -226,7 +250,7 @@ class UserHandler extends DefaultHandler
                 }
                  */
                 //write constraints to appropriate file
-                try
+                if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT)
                 {
                     //print z3 constraint
                     String variablename=""+name+"_"+proc_id+"";
@@ -246,10 +270,6 @@ class UserHandler extends DefaultHandler
                     intervalConstraint=intervalConstraint+"(assert (=> (and (<= ((HIGHESTC*"+proc.getProcOldClock().getClock().elementAt(1)+")+"+proc.getProcOldClock().getClock().elementAt(2)+") l"+proc_id+") (< l"+ proc_id +" ((HIGHESTC*"+proc.getProcClock().getClock().elementAt(1)+")+"+proc.getProcClock().getClock().elementAt(2)+")))(and (= "+variablename+" "+value+") ";
                     bracesCount++;
                     //System.out.println("End Element :" + qName+"\n");
-                }
-                catch (Exception e)
-                {
-                    e.printStackTrace();
                 }
                 mapofprocesses.put(proc_id,proc);
             }
@@ -277,35 +297,46 @@ class UserHandler extends DefaultHandler
         }
         else if(qName.equalsIgnoreCase("interval"))
         {
-            Process proc= mapofprocesses.get(proc_id);
-            intervalConstraint=intervalConstraint+" true";
-            while(bracesCount>0)
-            {
-                intervalConstraint=intervalConstraint+")";
-                bracesCount--;
-            }
-            intervalConstraint=intervalConstraint+"))\n";
-            //compute files/filenames to write to
-            //window corresponding to left endpoint/changepoint - windows are defined based on physical time - because snapshots are counted based on physical-time-defined windows
-            int lWindow= (proc.getProcOldClock().getClock().elementAt(0)/sysathand.GetEpsilon())* sysathand.GetEpsilon();
-            //window corresponding to right endpoint/changepoint
-            int rWindow= (proc.getProcClock().getClock().elementAt(0)/sysathand.GetEpsilon())* sysathand.GetEpsilon();
-            //for each window from lWindow to rWindow
-            for(int windowStart=lWindow; windowStart<=rWindow; windowStart=windowStart+sysathand.GetEpsilon()){
-                //compute the two files corresponding to the window
-                String file1Name, file2Name;
-                //write constraints to both files
-                //print z3 constraint
-                file1Name="constraints_"+windowStart+"to"+(windowStart+(sysathand.GetEpsilon()*2)+".smt2");
-                appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+file1Name,intervalConstraint);
-                if(windowStart>=sysathand.GetEpsilon()) {
-                    file2Name="constraints_"+(windowStart-sysathand.GetEpsilon())+"to"+(windowStart+sysathand.GetEpsilon()+".smt2");
-                    appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+file2Name,intervalConstraint);
+            if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT) {
+                Process proc = mapofprocesses.get(proc_id);
+                intervalConstraint = intervalConstraint + " true";
+                while (bracesCount > 0) {
+                    intervalConstraint = intervalConstraint + ")";
+                    bracesCount--;
+                }
+                intervalConstraint = intervalConstraint + "))\n";
+                //compute files/filenames to write to
+                //window corresponding to left endpoint/changepoint - windows are defined based on physical time - because snapshots are counted based on physical-time-defined windows
+                int lWindow = (proc.getProcOldClock().getClock().elementAt(0) / sysathand.GetEpsilon()) * sysathand.GetEpsilon();
+                //window corresponding to right endpoint/changepoint
+                int rWindow = (proc.getProcClock().getClock().elementAt(0) / sysathand.GetEpsilon()) * sysathand.GetEpsilon();
+                //for each window from lWindow to rWindow
+                for (int windowStart = lWindow; windowStart <= rWindow; windowStart = windowStart + sysathand.GetEpsilon()) {
+                    //compute the two files corresponding to the window
+                    String file1Name, file2Name;
+                    //write constraints to both files
+                    //print z3 constraint
+                    file1Name = "constraints_" + windowStart + "to" + (windowStart + (sysathand.GetEpsilon() * 2) + ".smt2");
+                    appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + file1Name, intervalConstraint);
+                    if (windowStart >= sysathand.GetEpsilon()) {
+                        file2Name = "constraints_" + (windowStart - sysathand.GetEpsilon()) + "to" + (windowStart + sysathand.GetEpsilon() + ".smt2");
+                        appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + file2Name, intervalConstraint);
+                    }
+                }
+                intervalConstraint = "";
+                proc_id = -1;
+                //System.out.println("End Element :" + qName+"\n");
+                //Check if all processes reached the end of current batch - if yes invoke the chanepoints-processing-function
+                if (lastProcessedBatchPt + TraceHLCTimestampingOfflineArithPredDet.batchlength + sysathand.GetEpsilon() < proc.getProcClock().getClock().elementAt(0)) {
+                    ProcsCrossedBatchEnd.add(proc_id);//
+                    if (ProcsCrossedBatchEnd.size() == sysathand.number_of_processes) {
+                        ProcessAndClearCandQueues_HLC();
+                        ProcsCrossedBatchEnd.clear();
+                        lastProcessedBatchPt = lastProcessedBatchPt + TraceHLCTimestampingOfflineArithPredDet.batchlength;
+                        highestSeenCInBatch = 0;
+                    }
                 }
             }
-            intervalConstraint="";
-            proc_id=-1;
-            //System.out.println("End Element :" + qName+"\n");
         }
         else if(qName.equalsIgnoreCase("system_run"))
         {
@@ -324,13 +355,16 @@ class UserHandler extends DefaultHandler
             int msgto=Integer.parseInt(new String(ch, start, length));
             //System.out.println("Message to: " + msgto);
             Process proc= mapofprocesses.get(proc_id);
-            if(proc_id!=msgto)
-            {
-                proc.updateClockLocalOrSengMsg(sender_time,true);
+            if(proc_id!=msgto) {
+                proc.updateClockLocalOrSendMsg(sender_time,true);
+            } else {
+                proc.updateClockLocalOrSendMsg(sender_time,false);//no reporting required for intra-process communication, so logging corresponding l,c values in the queue is not required
             }
-            else
-            {
-                proc.updateClockLocalOrSengMsg(sender_time,false);//no reporting required for intra-process communication, so logging corresponding l,c values in the queue is not required
+            if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT){
+                //update highest seen C
+                if(highestSeenCInBatch<proc.getProcClock().getClock().elementAt(2)) {
+                    highestSeenCInBatch = proc.getProcClock().getClock().elementAt(2);
+                }
             }
             mapofprocesses.put(proc_id,proc);
             proc_id=-1;
@@ -365,13 +399,15 @@ class UserHandler extends DefaultHandler
                 MessageSendStruct correspSendClk = senderproc.getClockfromQueue(sender_time);
                 proc.updateClockMessageRceive(receiver_time, correspSendClk.getMsgClock());
                 mapofprocesses.put(proc_id,proc);//update the process instance in the map corresponding the key-process id
-                String msgConstraint=("(assert (=> (>= l"+proc_id+" ((HIGHESTC*"+proc.getProcClock().getClock().elementAt(1)+")+"+proc.getProcClock().getClock().elementAt(2)+")) (not (<= l"+ senderid +" ((HIGHESTC*"+correspSendClk.getMsgClock().getClock().elementAt(1)+")+"+correspSendClk.getMsgClock().getClock().elementAt(2)+")))))\n");
-                int windowStart=(proc.getProcClock().getClock().elementAt(0)/sysathand.GetEpsilon())* sysathand.GetEpsilon();
-                String file1Name="constraints_"+windowStart+"to"+(windowStart+(sysathand.GetEpsilon()*2)+".smt2");
-                appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+file1Name, msgConstraint);
-                if(windowStart>=sysathand.GetEpsilon()) {
-                    String file2Name="constraints_"+(windowStart-sysathand.GetEpsilon())+"to"+(windowStart+sysathand.GetEpsilon()+".smt2");
-                    appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+file2Name, msgConstraint);
+                if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT) {
+                    String msgConstraint = ("(assert (=> (>= l" + proc_id + " ((HIGHESTC*" + proc.getProcClock().getClock().elementAt(1) + ")+" + proc.getProcClock().getClock().elementAt(2) + ")) (not (<= l" + senderid + " ((HIGHESTC*" + correspSendClk.getMsgClock().getClock().elementAt(1) + ")+" + correspSendClk.getMsgClock().getClock().elementAt(2) + ")))))\n");
+                    int windowStart = (proc.getProcClock().getClock().elementAt(0) / sysathand.GetEpsilon()) * sysathand.GetEpsilon();
+                    String file1Name = "constraints_" + windowStart + "to" + (windowStart + (sysathand.GetEpsilon() * 2) + ".smt2");
+                    appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + file1Name, msgConstraint);
+                    if (windowStart >= sysathand.GetEpsilon()) {
+                        String file2Name = "constraints_" + (windowStart - sysathand.GetEpsilon()) + "to" + (windowStart + sysathand.GetEpsilon() + ".smt2");
+                        appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + file2Name, msgConstraint);
+                    }
                 }
             } else {
                 if(proc_id!=senderid) { // case where it chose to ignore msg based on messgeacceptfrequency
@@ -379,8 +415,14 @@ class UserHandler extends DefaultHandler
                     Process senderproc= mapofprocesses.get(senderid);//get sender l,c by popping sender's dequeue
                     MessageSendStruct correspSendLC = senderproc.getClockfromQueue(sender_time);
                 }
-                proc.updateClockLocalOrSengMsg(receiver_time,false);
+                proc.updateClockLocalOrSendMsg(receiver_time,false);
                 mapofprocesses.put(proc_id,proc);//update the process instance in the map corresponding the key-process id
+            }
+            if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT) {
+                //update highest seen C
+                if (highestSeenCInBatch < proc.getProcClock().getClock().elementAt(2)) {
+                    highestSeenCInBatch = proc.getProcClock().getClock().elementAt(2);
+                }
             }
             bmreceiver_time = false;
             proc_id=-1;
@@ -396,8 +438,14 @@ class UserHandler extends DefaultHandler
             //no need to update clocks if bmisc because the clock was already updated at message send/recieve which actually caused this interval end point
             //if(!bmisc)//some intervals marked as "splitduetocommunication" happen to exist in the traces - so update clock for all types of intervals
             {
-                proc.updateClockLocalOrSengMsg(end_time,false);
+                proc.updateClockLocalOrSendMsg(end_time,false);
                 mapofprocesses.put(proc_id,proc);
+            }
+            if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT) {
+                //update highest seen C
+                if (highestSeenCInBatch < proc.getProcClock().getClock().elementAt(2)) {
+                    highestSeenCInBatch = proc.getProcClock().getClock().elementAt(2);
+                }
             }
             bmisc = false;
             bend_time = false;
@@ -510,7 +558,17 @@ class UserHandler extends DefaultHandler
             }//end of if (minCPtProc!=-1)
         }while(minCPtProc!=-1);
         //System.out.println("No more Changepoints to process.");
-        System.out.println("Window based snapshot count:"+ TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount);
+        System.out.println("Window based snapshot count so far:"+ TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount);
+        //clear current changepoint queue and make the next batch's changepoint queue as the current batch's changepoint queue
+        if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT){
+            for(int i=0;i<sysathand.GetNumberOfProcesses();i++){//loop through all process queues
+                Process currProc= mapofprocesses.get(i); //get the current state of the process
+                currProc.clearCurrentChangePointQ();//clear current batch's changepoint queue
+                currProc.setCPtQueue(currProc.getCPtQueueNextBatch());//make the next batch's queue as the current batch's queue
+                currProc.clearNextChangePointQ();//clear next batch's changepoint queue
+                mapofprocesses.put(i,currProc);
+            }
+        }
     }
     int getWindow(int cPtLvalue, int syseps)
     {
