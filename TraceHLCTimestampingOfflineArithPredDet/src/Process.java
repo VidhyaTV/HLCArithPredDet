@@ -5,6 +5,7 @@ import java.io.File;
 import java.util.Vector;
 import java.util.Deque;
 import java.util.ArrayDeque;
+import java.util.Iterator;
 class Process
 {
     int id;
@@ -83,8 +84,13 @@ class Process
     {
         return cPointQueueNextBatch;
     }
-    void setCPtQueue(Deque<ChangePoint> updatedQueue)
-    {
+    void deepCopyCurrentCPtQueue(Deque<ChangePoint> updatedQueue){
+        cPointQueue= new ArrayDeque<ChangePoint>();
+        while(!updatedQueue.isEmpty()) {
+            cPointQueue.add(updatedQueue.removeFirst());
+        }
+    }
+    void setCPtQueue(Deque<ChangePoint> updatedQueue) {
         cPointQueue=updatedQueue;
     }
     //clear queue method at a process - given time x --CLEARQUEUE
@@ -123,20 +129,10 @@ class Process
     //0- add to process' current batch's changepoint queue
     //1- add to process' next batch's changepoint queue
     //2- add to process' both batchs' changepoint queue
-    void newChangePoint(Clock cPtTime, int endPtIdentifier, int value, int whichQueues)
+    void newChangePoint(Clock cPtTime, int endPtIdentifier, int value)
     {
         ChangePoint newCPt= new ChangePoint(cPtTime, endPtIdentifier, value);
-        if(whichQueues==0){
-            cPointQueue.add(newCPt);
-        } else if (whichQueues==1) {
-            cPointQueueNextBatch.add(newCPt);
-        } else if (whichQueues==2){
-            cPointQueueNextBatch.add(newCPt);
-            cPointQueue.add(newCPt);
-        } else {
-            System.out.println("Invalid option for changepoint queues.");
-            System.exit(0);
-        }
+        cPointQueue.add(newCPt);
         if(TraceHLCTimestampingOfflineArithPredDet.debugmode==2)
         {
             //JUST FOR DEBUGGING
@@ -345,6 +341,21 @@ class Process
     void clearNextChangePointQ(){
         cPointQueueNextBatch.clear();
     }
+    void fillNextQueueFromCurrentQueue(int batchBorderPt){
+        // Returns an iterator over the elements in this deque
+        Iterator<ChangePoint> it = cPointQueue.iterator();
+        while (it.hasNext()) {
+            ChangePoint currLCpt= it.next();
+            ChangePoint currRCpt= it.next();
+            //any pair of changepoint with right changepoint-ohysical-timestamp greater than current window's strict right should be copied
+            if(currRCpt.getcPointTimestamp().getClock().elementAt(0)>=batchBorderPt) {
+                ChangePoint cptLCopy = new ChangePoint(new HLC(currLCpt.getcPointTimestamp().getClock()), currLCpt.getEndPointType(), currLCpt.getiValue());
+                ChangePoint cptRCopy = new ChangePoint(new HLC(currRCpt.getcPointTimestamp().getClock()), currRCpt.getEndPointType(), currRCpt.getiValue());
+                cPointQueueNextBatch.add(cptLCopy);
+                cPointQueueNextBatch.add(cptRCopy);
+            }
+        }
+    }
     Deque<ChangePoint> cleanUpChangePtQ(){
         Deque<ChangePoint> cleansedQ = new ArrayDeque<ChangePoint>();
         Deque<ChangePoint> intermediateCPtsQ = new ArrayDeque<ChangePoint>();
@@ -414,7 +425,10 @@ class Process
                 Clock origLTime = nextLCPt.getcPointTimestamp();
                 origLTime.setClock(currRClock.getClock());
                 nextLCPt.setcPointTimestamp(origLTime);
-                if (!nextLCPt.getcPointTimestamp().lessThan(nextRCPt.getcPointTimestamp())) {
+                if(nextLCPt.getcPointTimestamp().equalTo(nextRCPt.getcPointTimestamp())){
+                    continue;//ignore the next interval because they ended having equal starting and ending points after update
+                }
+                if (!nextLCPt.getcPointTimestamp().lessThan(nextRCPt.getcPointTimestamp())) {//should not execute- added for debugging purposes
                     System.out.println("Updated next interval has larger left endpoint " + nextLCPt.getcPointTimestamp().getClock().toString() + "than right endpoint" + nextRCPt.getcPointTimestamp().getClock().toString() + ".");
                     System.exit(0);
                 }
