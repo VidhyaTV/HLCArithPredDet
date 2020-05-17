@@ -52,17 +52,23 @@ public class TraceHLCTimestampingOfflineArithPredDet {
             batchlength=10000;
             HLCplusEpsPlusSMT=true;
             perWindowSMTCheck=false;
-            File inputFile = new File(inpfilename);			
+            File inputFile = new File(inpfilename);
 			if(System.getProperty("os.name").toLowerCase().indexOf("win") >= 0){
 				backslash="\\";
 			} else {
 				backslash="/";
 			}
+            String folderName;
+			if(HLCplusEpsPlusSMT){//include gamma in folder name so that a separate folder is created for each gamma setting
+                folderName = inpfilename.substring(inpfilename.lastIndexOf('/')+1, inpfilename.lastIndexOf(".xml"))+"_intervDrpFreq"+intervDropFreq+"_msgDrpFreq"+msgDropFreq+"_perWindSMT"+perWindowSMTCheck+"_gamma"+gamma;
+            } else { //use same folder for all gamma settings because we can run snapCompare-code to compute false positives for all gamma settings in one run by scanning the single folder
+                folderName = inpfilename.substring(inpfilename.lastIndexOf('/')+1, inpfilename.lastIndexOf(".xml"))+"_intervDrpFreq"+intervDropFreq+"_msgDrpFreq"+msgDropFreq;
+            }
+            outputLocation=outputLocation+backslash+folderName;
             SAXParserFactory factory = SAXParserFactory.newInstance();
             SAXParser saxParser = factory.newSAXParser();//create XML parser instance
             UserHandler userhandler = new UserHandler();
             saxParser.parse(inputFile, userhandler);
-            System.out.println("The total snapshot count: "+snapshotcount);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -87,14 +93,13 @@ class UserHandler extends DefaultHandler
     int senderid=-1;// variable to remember sender id for message RECEIVE
     SysAtHand sysathand=new SysAtHand(); //object that accounts for epsilon and number of processes in current system
 	String fromVtoEndStr = TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(TraceHLCTimestampingOfflineArithPredDet.inpfilename.indexOf("_v")+2, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf(".xml"));
-    String intervalLengthStr=fromVtoEndStr.substring(0, fromVtoEndStr.indexOf('_'));
+    String intervalLengthStr=fromVtoEndStr.substring(0, Math.max(0,fromVtoEndStr.indexOf('_')));
     Map<Integer, Process> mapofprocesses = new HashMap<Integer, Process>();//map of processes with process id as the key and Process instance as value
     HLC largestIntervalEnd;
     //variables for printing z3 constraints for intervals
     String intervalConstraint="";
     int bracesCount=0;
-    String folderName = TraceHLCTimestampingOfflineArithPredDet.inpfilename.substring(TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf('/')+1, TraceHLCTimestampingOfflineArithPredDet.inpfilename.lastIndexOf(".xml"))+"_intervDrpFreq"+TraceHLCTimestampingOfflineArithPredDet.intervDropFreq+"_msgDrpFreq"+TraceHLCTimestampingOfflineArithPredDet.msgDropFreq+"_perWindSMT"+TraceHLCTimestampingOfflineArithPredDet.perWindowSMTCheck;
-    String nwfolder=TraceHLCTimestampingOfflineArithPredDet.outputLocation+TraceHLCTimestampingOfflineArithPredDet.backslash+folderName; //input file name without file extension
+    String nwfolder=TraceHLCTimestampingOfflineArithPredDet.outputLocation; //input file name without file extension
     int lastProcessedBatchPt=0;
     Set<Integer> ProcsCrossedBatchEnd=new HashSet<Integer>();
     //variable for window based snapshot count for the overall run - including all batches if batch-wise execution was done
@@ -105,6 +110,12 @@ class UserHandler extends DefaultHandler
     boolean noMoreBatchesToProcessForHLCPlusEps=false;
     boolean noMoreBatchesToProcessForSMTBasedDet=false;
     Vector<Integer> highestPtPerProc = new Vector<Integer>();
+    String ExecutionOutputContent="";
+    long totatTimeForHLCWithGammaExt=0;
+    long totalTimeMarkedWindowsFiltering=0;
+    long totalTimeAllWindowsSMT=0;
+    long totalTimeMarkedWindowsFilteringWithoutFileWriting=0;
+    long totalTimeAllWindowsSMTWithoutFileWriting=0;
     @Override
     public void startElement(String uri, String localName, String qName, Attributes attributes) throws SAXException
     {
@@ -123,6 +134,9 @@ class UserHandler extends DefaultHandler
             if(TraceHLCTimestampingOfflineArithPredDet.intervDropFreq!=0){
                 sysathand.setInterval_length(Integer.parseInt(intervalLengthStr));
             }
+            ExecutionOutputContent=ExecutionOutputContent+"\nProcessing "+TraceHLCTimestampingOfflineArithPredDet.inpfilename;
+            ExecutionOutputContent=ExecutionOutputContent+"\nfromVtoEndStr:"+fromVtoEndStr;
+            ExecutionOutputContent=ExecutionOutputContent+"\nintervalLengthStr:"+intervalLengthStr;
             //setting gamma to epsilon if the provided value is positive
             if(TraceHLCTimestampingOfflineArithPredDet.gamma > 0){
                 TraceHLCTimestampingOfflineArithPredDet.gamma = (int)Math.floor(sysathand.GetEpsilon() * TraceHLCTimestampingOfflineArithPredDet.gamma);
@@ -151,6 +165,7 @@ class UserHandler extends DefaultHandler
             tempVector.add(0);
             largestIntervalEnd=new HLC(tempVector);
             if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT) {
+                Date smtbefore = new Date();
                 String vDeclarationStr="",lDeclarationStr="",epsilonConstraintsStr="",predicateConstraintsStr="(assert ";
                 //Creating constraints common to all smt-constraint files
                 for (int processId = 0; processId < sysathand.GetNumberOfProcesses(); processId++) {
@@ -175,10 +190,22 @@ class UserHandler extends DefaultHandler
                     predicateConstraintsStr = predicateConstraintsStr + ")";
                 }
                 predicateConstraintsStr = predicateConstraintsStr + "\n";
+
+                //predicate for mutual exclusion
+
+
                 commonConstraintsStr = vDeclarationStr+lDeclarationStr+epsilonConstraintsStr+predicateConstraintsStr;
+                //Code added for timing
+                long marked_smt_diff= ((new Date()).getTime() - smtbefore.getTime());
                 //add to all-constraints-in-batch-combined-file
                 String allConstraintsInBatchFile= nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + "all_constraints_" + lastProcessedBatchPt + "to" +(lastProcessedBatchPt+TraceHLCTimestampingOfflineArithPredDet.batchlength+sysathand.GetEpsilon())+ ".smt2";
                 appendToFile(allConstraintsInBatchFile, commonConstraintsStr);
+                long all_smt_diff = ((new Date()).getTime() - smtbefore.getTime());
+                totalTimeAllWindowsSMT=totalTimeAllWindowsSMT+all_smt_diff;
+                //all other totals consider time without file writing to AllWindowsInOneBatchFile
+                totalTimeAllWindowsSMTWithoutFileWriting=totalTimeAllWindowsSMTWithoutFileWriting+marked_smt_diff;
+                totalTimeMarkedWindowsFiltering=totalTimeMarkedWindowsFiltering+marked_smt_diff;
+                totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+marked_smt_diff;
             }
         } else if (qName.equalsIgnoreCase("sender_time")) {
             bmsender_time = true;
@@ -260,11 +287,17 @@ class UserHandler extends DefaultHandler
                  */
                 //write interval constraints to appropriate file irrespective of whether they are true or false intervals
                 if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT) {
+                    Date smtbefore = new Date();
                     //create constraint
                     String variablename=""+name+"_"+proc_id+"";
                     //make sure to use the actual interval end-timestamps i.e. not the epsilon extended timestamps
                     intervalConstraint=intervalConstraint+"(assert (=> (and (<= "+proc.getProcOldClock().getClock().elementAt(0)+" l"+proc_id+") (< l"+ proc_id +" "+proc.getProcClock().getClock().elementAt(0)+")) (and (= "+variablename+" "+variableValForIntervalConstraint+") ";
                     bracesCount++;
+                    long smt_diff = ((new Date()).getTime() - smtbefore.getTime());
+                    totalTimeAllWindowsSMT=totalTimeAllWindowsSMT+smt_diff;
+                    totalTimeAllWindowsSMTWithoutFileWriting=totalTimeAllWindowsSMTWithoutFileWriting+smt_diff;
+                    totalTimeMarkedWindowsFiltering=totalTimeMarkedWindowsFiltering+smt_diff;
+                    totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+smt_diff;
                 }
                 mapofprocesses.put(proc_id,proc);
             }
@@ -281,6 +314,8 @@ class UserHandler extends DefaultHandler
         } else if(qName.equalsIgnoreCase("misc")) {
         } else if(qName.equalsIgnoreCase("interval")) {
             if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT) {
+                Date smtbefore = new Date();
+                Date smtbefore1 = new Date();
                 Process proc = mapofprocesses.get(proc_id);
                 intervalConstraint = intervalConstraint + " true";
                 while (bracesCount > 0) {
@@ -288,6 +323,9 @@ class UserHandler extends DefaultHandler
                     bracesCount--;
                 }
                 intervalConstraint = intervalConstraint + "))\n";
+                long all_smt_diff = ((new Date()).getTime() - smtbefore.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                totalTimeAllWindowsSMT=totalTimeAllWindowsSMT+all_smt_diff;
+                totalTimeAllWindowsSMTWithoutFileWriting=totalTimeAllWindowsSMTWithoutFileWriting+all_smt_diff;
                 //Using pattern match find interval Starting and ending Physical time, and associated local-variable-value
                 int intervalStartPt=0, intervalEndPt=0;
                 String intervStartPatternStr="(.*)(<=\\s)(\\d+)(\\sl)(\\d+)(.*)";
@@ -321,7 +359,10 @@ class UserHandler extends DefaultHandler
                     int updatedEndPt=Math.min(intervalEndPt,endPtInFileNm);
                     String correctedIntervStr=intervalConstraint.replaceFirst(intervStartPatternStr,"$1$2"+updatedStartPt+"$4$5$6");
                     correctedIntervStr=correctedIntervStr.replaceFirst(intervEndPatterStr,"$1$2$3$4"+updatedEndPt+"$6");
+                    long marked_without_file_writing_smt_diff = ((new Date()).getTime() - smtbefore1.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                    totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+marked_without_file_writing_smt_diff;
                     appendToFile(file1Name,correctedIntervStr);
+                    smtbefore1 = new Date();
                     if (windowStart >= sysathand.GetEpsilon()) {
                         startPtInFileNm=windowStart - sysathand.GetEpsilon();
                         endPtInFileNm=windowStart + sysathand.GetEpsilon();
@@ -331,14 +372,22 @@ class UserHandler extends DefaultHandler
                         updatedEndPt=Math.min(intervalEndPt,endPtInFileNm);
                         correctedIntervStr=intervalConstraint.replaceFirst(intervStartPatternStr,"$1$2"+updatedStartPt+"$4$5$6");
                         correctedIntervStr=correctedIntervStr.replaceFirst(intervEndPatterStr,"$1$2$3$4"+updatedEndPt+"$6");
+                        marked_without_file_writing_smt_diff = ((new Date()).getTime() - smtbefore1.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                        totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+marked_without_file_writing_smt_diff;
                         appendToFile(file2Name,correctedIntervStr);
+                        smtbefore1 = new Date();
                     }
                 }
+                long marked_smt_diff = ((new Date()).getTime() - smtbefore.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                totalTimeMarkedWindowsFiltering=totalTimeMarkedWindowsFiltering+marked_smt_diff;
+                Date allwind_smtbefore = new Date();//timing writing to all-windows-file
                 int currentBatchStrictEnd=lastProcessedBatchPt+TraceHLCTimestampingOfflineArithPredDet.batchlength;
                 //add to all-constraints-in-batch-combined-file
                 String allConstraintsInBatchFile= nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + "all_constraints_" + lastProcessedBatchPt + "to" +(currentBatchStrictEnd+sysathand.GetEpsilon())+ ".smt2";
                 appendToFile(allConstraintsInBatchFile, intervalConstraint);
                 intervalConstraint = "";
+                all_smt_diff = ((new Date()).getTime() - allwind_smtbefore.getTime());
+                totalTimeAllWindowsSMT=totalTimeAllWindowsSMT + all_smt_diff;//updating only totalTimeAllWindowsSMT and not totalTimeAllWindowsSMTWithoutFileWriting because this part involves only file writing
                 //Check if all processes reached the end of current batch - if yes invoke the chanepoints-processing-function
                 if (currentBatchStrictEnd + sysathand.GetEpsilon() < proc.getProcClock().getClock().elementAt(0)) {
                     ProcsCrossedBatchEnd.add(proc_id);
@@ -354,6 +403,14 @@ class UserHandler extends DefaultHandler
             while(!noMoreBatchesToProcessForHLCPlusEps || (TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT && (!markedFilesToProcessDuringNxtBatch.isEmpty() || !noMoreBatchesToProcessForSMTBasedDet))) { //noMoreBatchesToProcessForHLCPlusEps is set to true if at least process does not have any more changepoints to process
                 EndOfBatchProcessing(true);
             }
+            ExecutionOutputContent=ExecutionOutputContent+"\nThe total snapshot count: "+TraceHLCTimestampingOfflineArithPredDet.snapshotcount;
+            ExecutionOutputContent=ExecutionOutputContent+"\nThe total time taken for HLC with gamma extension filtering: "+totatTimeForHLCWithGammaExt;
+            ExecutionOutputContent=ExecutionOutputContent+"\nThe total time taken for constraint preparation for SMT without gamma filtering"+totalTimeAllWindowsSMTWithoutFileWriting;
+            ExecutionOutputContent=ExecutionOutputContent+"\nThe total time taken for constraint preparation and writing for SMT without gamma filtering: "+totalTimeAllWindowsSMT;
+            ExecutionOutputContent=ExecutionOutputContent+"\nThe total time taken for constraint preparation for SMT with gamma extension filtering: "+totalTimeMarkedWindowsFilteringWithoutFileWriting;
+            ExecutionOutputContent=ExecutionOutputContent+"\nThe total time taken for constraint preparation and writing for SMT with gamma extension filtering: "+totalTimeMarkedWindowsFiltering;
+            String outputFileName = nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + "ExecutionOutput.txt";
+            appendToFile(outputFileName,ExecutionOutputContent);
         }
     }
     @Override
@@ -401,7 +458,12 @@ class UserHandler extends DefaultHandler
                 proc.updateClockMessageRceive(receiver_time, correspSendClk.getMsgClock());
                 mapofprocesses.put(proc_id,proc);//update the process instance in the map corresponding the key-process id
                 if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT) {
+                    Date smtbefore = new Date();
                     String msgConstraint = ("(assert (=> (>= l" + proc_id + " " + proc.getProcClock().getClock().elementAt(0) + ") (not (< l" + senderid + " " + correspSendClk.getMsgClock().getClock().elementAt(0) + "))))\n");
+                    long all_smt_diff = ((new Date()).getTime() - smtbefore.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                    totalTimeAllWindowsSMT=totalTimeAllWindowsSMT+all_smt_diff;
+                    totalTimeAllWindowsSMTWithoutFileWriting=totalTimeAllWindowsSMTWithoutFileWriting+all_smt_diff;
+                    //adding it to corresponding window-files
                     HashSet<String> fileNamesToWriteTo=new HashSet<String>();;
                     //find two files in which the receiver pt falls in
                     int windowStart = (proc.getProcClock().getClock().elementAt(0) / sysathand.GetEpsilon()) * sysathand.GetEpsilon();
@@ -419,12 +481,19 @@ class UserHandler extends DefaultHandler
                         String file4Name = "constraints_" + (windowStart1 - sysathand.GetEpsilon()) + "to" + (windowStart1 + sysathand.GetEpsilon()) + ".smt2";
                         fileNamesToWriteTo.add(file4Name);
                     }
-                    //add to all-constraints-in-batch-combined-file
-                    String allConstraintsInBatchFile= "all_constraints_" + lastProcessedBatchPt + "to" +(lastProcessedBatchPt+TraceHLCTimestampingOfflineArithPredDet.batchlength+sysathand.GetEpsilon())+ ".smt2";
-                    fileNamesToWriteTo.add(allConstraintsInBatchFile);
+                    long marked_without_file_writing_smt_diff = ((new Date()).getTime() - smtbefore.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                    totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+marked_without_file_writing_smt_diff;
                     for(String filename:fileNamesToWriteTo){//add message constraint to each of the identified files
                         appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + filename, msgConstraint);
                     }
+                    long marked_smt_diff = ((new Date()).getTime() - smtbefore.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                    totalTimeMarkedWindowsFiltering=totalTimeMarkedWindowsFiltering+marked_smt_diff;
+                    Date allwind_smtbefore = new Date();//timing writing to all-windows-file
+                    //add to all-constraints-in-batch-combined-file
+                    String allConstraintsInBatchFile= "all_constraints_" + lastProcessedBatchPt + "to" +(lastProcessedBatchPt+TraceHLCTimestampingOfflineArithPredDet.batchlength+sysathand.GetEpsilon())+ ".smt2";
+                    appendToFile(nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + allConstraintsInBatchFile, msgConstraint);
+                    all_smt_diff = ((new Date()).getTime() - allwind_smtbefore.getTime());
+                    totalTimeAllWindowsSMT=totalTimeAllWindowsSMT + all_smt_diff;//updating only totalTimeAllWindowsSMT and not totalTimeAllWindowsSMTWithoutFileWriting because this part involves only file writing
                 }
             } else {
                 if(proc_id!=senderid) { // case where it chose to ignore msg based on messgeacceptfrequency
@@ -469,16 +538,16 @@ class UserHandler extends DefaultHandler
             if(!noMoreBatchesToProcessForSMTBasedDet) {
                 //Invoke smt solver on file containing constraints from all windows
                 boolean predSatisfactionInBatch = processBatchSMTfile(reachedEOF);
-                if (predSatisfactionInBatch && !TraceHLCTimestampingOfflineArithPredDet.perWindowSMTCheck) {
+                if (predSatisfactionInBatch) {
                     TraceHLCTimestampingOfflineArithPredDet.smtPerBatchBasedSnapshotCount++;
-                    System.out.println("SMT based per-batch snapshot count so far:" + TraceHLCTimestampingOfflineArithPredDet.smtPerBatchBasedSnapshotCount);
+                    ExecutionOutputContent=ExecutionOutputContent+"\nSMT based per-batch snapshot count so far:" + TraceHLCTimestampingOfflineArithPredDet.smtPerBatchBasedSnapshotCount;
                 }
             }
             String smtOutputFile = nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + "SMTCuts.txt";
             int nwSmtCutsCount = processMarkedSMTfiles(markedFilesInBatch, smtOutputFile, reachedEOF);//invoke this function even if filesMarked is empty because any unprocessed marked files from previous batch should be processed
             if(TraceHLCTimestampingOfflineArithPredDet.perWindowSMTCheck){
                 TraceHLCTimestampingOfflineArithPredDet.smtPerWindowBasedSnapshotCount=TraceHLCTimestampingOfflineArithPredDet.smtPerWindowBasedSnapshotCount+nwSmtCutsCount;
-                System.out.println("SMT based per-window based snapshot count so far:"+ TraceHLCTimestampingOfflineArithPredDet.smtPerWindowBasedSnapshotCount);
+                ExecutionOutputContent=ExecutionOutputContent+"\nSMT based per-window based snapshot count so far:"+ TraceHLCTimestampingOfflineArithPredDet.smtPerWindowBasedSnapshotCount;
             }
         }
         //clear current changepoint queue and make the next batch's changepoint queue as the current batch's changepoint queue
@@ -489,33 +558,40 @@ class UserHandler extends DefaultHandler
             mapofprocesses.put(i,currProc);
         }
         int currentBatchStrictEnd=lastProcessedBatchPt+TraceHLCTimestampingOfflineArithPredDet.batchlength;
-        //delete all files created while processing candidates in current batch
-        deleteAllButLastFileInCurrentBatch(currentBatchStrictEnd);
         ProcsCrossedBatchEnd.clear();
         lastProcessedBatchPt = currentBatchStrictEnd;
-        System.out.println("Processed batch ending in :"+lastProcessedBatchPt+"\n");
+        //System.out.println("Processed batch ending in :"+lastProcessedBatchPt+"\n");
         if(TraceHLCTimestampingOfflineArithPredDet.HLCplusEpsPlusSMT) {
+            //delete all files created while processing candidates in current batch
+            deleteAllButLastFileInCurrentBatch(currentBatchStrictEnd);//lastProcessedBatchPt was updated but we are using currentBatchStrictEnd which is still the same
+            Date allwind_smtbefore = new Date();//timing writing to all-windows-file
+            Date allwind_smtbefore1 = new Date();//timing writing to all-windows-file without timing file writes
             //preparing next batch's all-constraints file
             String allConstraintsInNxtBatchFile = nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + "all_constraints_" + lastProcessedBatchPt + "to" + (lastProcessedBatchPt+TraceHLCTimestampingOfflineArithPredDet.batchlength+ sysathand.GetEpsilon()) + ".smt2";
             //identify if there are constraint files in the next batch
             List<String> filesInNextBatch = getConstraintFilesFromBatch(lastProcessedBatchPt);
             if (filesInNextBatch.isEmpty()) {
-                System.out.println("No more batches for Smt - all windows combined processing");
+                ExecutionOutputContent=ExecutionOutputContent+"\nNo more batches for Smt - all windows combined processing";
                 noMoreBatchesToProcessForSMTBasedDet = true;
+                long all_smt_diff_withoutfilewrites = ((new Date()).getTime() - allwind_smtbefore1.getTime());
+                totalTimeAllWindowsSMTWithoutFileWriting=totalTimeAllWindowsSMTWithoutFileWriting + all_smt_diff_withoutfilewrites;
             } else {
                 //if yes copy constraints from all those files to the common-all-constraints file
+                long all_smt_diff_withoutfilewrites = ((new Date()).getTime() - allwind_smtbefore1.getTime());
+                totalTimeAllWindowsSMTWithoutFileWriting=totalTimeAllWindowsSMTWithoutFileWriting + all_smt_diff_withoutfilewrites;
                 appendToFile(allConstraintsInNxtBatchFile, commonConstraintsStr);//add common constraints- because variable declaration should be first in an smt file
                 for (String consfname : filesInNextBatch) {
                     //add constraints from all file in the next batch i.e.files with start pt as lastProcessedBatchPt to start pt as lastProcessedBatchPt+batchlength-epsilon
                     appendContentFromOneFileToAnother(consfname, allConstraintsInNxtBatchFile);
                 }
             }
+            long all_smt_diff = ((new Date()).getTime() - allwind_smtbefore.getTime());
+            totalTimeAllWindowsSMT=totalTimeAllWindowsSMT + all_smt_diff;
         }
     }
     HashSet<String> ProcessAndClearCandQueues_HLC() {
         //variable for window based snapshot count within a batch
         HashSet<String> filesMarked = new HashSet<String>();
-        System.out.println("Processing changepoint queue.");
         if (sysathand.GetNumberOfProcesses() == 0) {
             System.out.println("Zero processes in system.");
             System.exit(0);
@@ -536,19 +612,23 @@ class UserHandler extends DefaultHandler
             printChangepointsForAllProc(snapshot_cpt_file);
         }
         int strictBatchRt = lastProcessedBatchPt + TraceHLCTimestampingOfflineArithPredDet.batchlength;
+        Date before = new Date();//compute time taken for hlc with gamma extension
         for (int i = 0; i < sysathand.GetNumberOfProcesses(); i++) {//loop through all process queues
             Process currProc = mapofprocesses.get(i); //get the current state of the process
+            currProc.setCPtQueue(currProc.cleanUpChangePtQ());
             //any pair of changepoint with right changepoint-ohysical-timestamp greater than current window's strict right should be copied to next batch queue
             currProc.fillNextQueueFromCurrentQueue(strictBatchRt);
             if (currProc.getCPtQueueNextBatch().isEmpty()) {
                 noMoreBatchesToProcessForHLCPlusEps = true;//last batch
             }
-            currProc.setCPtQueue(currProc.cleanUpChangePtQ());
             //currProc.fixLastChangepoint(largestIntervalEnd);
             //remember to update mapofprocesses accordingly
             mapofprocesses.put(i, currProc);
         }
-        if(noMoreBatchesToProcessForHLCPlusEps){System.out.println("But no more changepoints to process.");}
+        //compute time taken for hlc with gamma extension
+        long r_diff = ((new Date()).getTime() - before.getTime());
+        totatTimeForHLCWithGammaExt=totatTimeForHLCWithGammaExt+r_diff;
+        //if(noMoreBatchesToProcessForHLCPlusEps){System.out.println("But no more changepoints to process.");}
         /*****************print all candidates and changepoints of all the processes to see if change points were processed correctly***************/
         if (TraceHLCTimestampingOfflineArithPredDet.debugmode == 1) {
             String snapshot_cand_file = "", snapshot_cpt_file = "";
@@ -562,6 +642,7 @@ class UserHandler extends DefaultHandler
             printCandidatesForAllProc(snapshot_cand_file);
             printChangepointsForAllProc(snapshot_cpt_file);
         }
+        before = new Date();//compute time taken for hlc with gamma extension
         //create variable overlap_count
         int overlap_count = 0;
         int prevtokenend = 0;
@@ -575,7 +656,7 @@ class UserHandler extends DefaultHandler
                 Process chosenProc = mapofprocesses.get(minCPtProc);//get the current state of the process
                 Deque<ChangePoint> chosenProccPtq = chosenProc.getCPtQueue();//get the changepoint queue of the process
                 if (chosenProccPtq.isEmpty()) {
-                    System.out.println("Something went wrong. Queue at the chosen process is empty.");
+                    ExecutionOutputContent=ExecutionOutputContent+"\nSomething went wrong. Queue at the chosen process is empty.";
                     System.exit(0);
                 }
                 ChangePoint currentCPt = chosenProccPtq.removeFirst();
@@ -586,7 +667,8 @@ class UserHandler extends DefaultHandler
                 //remember to update mapofprocesses accordingly
                 mapofprocesses.put(minCPtProc, chosenProc);
                 /*************Report timestamp of overlap if it corresponds to a consistent cut****************/
-                if (overlap_count == sysathand.GetNumberOfProcesses()) {
+                //if (overlap_count == sysathand.GetNumberOfProcesses()) {
+                if (overlap_count == 2) {//check if two processes are accessing the token simultaneously
                     String snapshot_outfile = "", snapshot_flex_window_counted_outfile = "", snapshot_fixed_window_counted_outfile = "";
                     //if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
                     //********************************creating needed files and folders reporting*******************************
@@ -626,14 +708,18 @@ class UserHandler extends DefaultHandler
                             }
                         }
                     }
+                    //compute time taken for hlc with gamma extension - without time taken to report i.e.write snapshot to file
+                    r_diff = ((new Date()).getTime() - before.getTime());
+                    totatTimeForHLCWithGammaExt=totatTimeForHLCWithGammaExt+r_diff;
                     /********************writing to all-snapshots file (counted or not)**************************/
                     //if (TraceHLCTimestampingOfflineArithPredDet.debugmode==1) {
                     reportSnapshot(currentCPt, snapshot_outfile, minCPtProc, markifcounted);
                     //}
+                    before = new Date();//compute time taken for hlc with gamma extension
                 }//end of if overlap == number of processes
             }//end of if (minCPtProc!=-1)
         } while (minCPtProc != -1);
-        System.out.println("Window based snapshot count so far using HLC+gamma:" + TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount);
+        ExecutionOutputContent=ExecutionOutputContent+"\nWindow based snapshot count so far using HLC+gamma:" + TraceHLCTimestampingOfflineArithPredDet.fixed_window_snapshotcount;
         return filesMarked;
     }
 
@@ -661,9 +747,14 @@ class UserHandler extends DefaultHandler
     int processMarkedSMTfiles(HashSet<String> smtFiles, String smtOutputFile, boolean reachedEOF){
         String csvLogFile=nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+ "timetracking.csv";
         appendToFile(smtOutputFile,"Processing marked files in batch ending at :"+lastProcessedBatchPt+"\n");
+        Date smtbefore = new Date();
+        Date smtbefore1 = new Date();//for tracking processing of marked files without accounting for time taken for file writes
         for(String unprocessedFile:markedFilesToProcessDuringNxtBatch){//also process any unprocessed files
             smtFiles.add(unprocessedFile);
+            long marked_smt_diff = ((new Date()).getTime() - smtbefore1.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+            totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+marked_smt_diff;
             appendToFile(smtOutputFile,unprocessedFile+" is pending from previous batch.\n");
+            smtbefore1 = new Date();
         }
         int smtSnapshotsCount=0;
         // create a single file for all marked windows in the batch and run solver on it at the end of this function
@@ -675,7 +766,7 @@ class UserHandler extends DefaultHandler
         //for each marked file name
         for(String fileNm: smtFiles) {
             /***Determining if file belongs to current batch or (current batch and next batch)**/
-            /***because we want to process only files that are complete and won't be appended to during the next batch***/
+            /***because we want to process only files that are complete and not those that will be appended to during the next batch***/
             //fetching window start pt from file name
             int windowSt=0, windowEnd=0;
             Pattern pattern4 = Pattern.compile("(constraints_)(\\d+)(to)(\\d+)(.smt2)");
@@ -690,12 +781,19 @@ class UserHandler extends DefaultHandler
                     //if it is a border file from previous batch- do not add it to marked-files-combined-file
                     // ---because it was processed as part of previous batch's marked-files-combined-file
                     if(windowSt!=lastProcessedBatchPt-sysathand.GetEpsilon()) {
+                        long marked_smt_diff = ((new Date()).getTime() - smtbefore1.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                        totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+marked_smt_diff;
                         appendToFile(markedWindowsCombinedSMTFile, commonConstraintsStr);//add common constraints - epsilon constraints, variable declaration, violation/predicate constraint
+                        smtbefore1 = new Date();
                     }
                 }
                 if(markedFilesToProcessDuringNxtBatch.contains(fileNm)) {//remove file from pending files list once you process it
                     markedFilesToProcessDuringNxtBatch.remove(fileNm);
                 }
+                long marked_smt_diff = ((new Date()).getTime() - smtbefore1.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+marked_smt_diff;
+                long marked_smt_diff_withfilewrites = ((new Date()).getTime() - smtbefore.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                totalTimeMarkedWindowsFiltering=totalTimeMarkedWindowsFiltering+marked_smt_diff_withfilewrites;
                 String newFileNm="";
                 /***********Add variable declaration constraints, epsilon constraints, violation/predicate constraints*************/
                 //create/update/run file with updated constraints per window only if per-window-smt processing is required
@@ -706,11 +804,13 @@ class UserHandler extends DefaultHandler
                     //add all constraints(msg and interval constraints) from the current constraint file to the new file
                     appendContentFromOneFileToAnother(fileNm,newFileNm);
                 }
+                smtbefore = new Date();
                 //if it is a border file from previous batch- do not add it to marked-files-combined-file
                 if(windowSt!=lastProcessedBatchPt-sysathand.GetEpsilon()) {
                     //add all constraints(msg and interval constraints) from the current constraint file to all-marked-windows-in-batch-combined-file as well
                     appendContentFromOneFileToAnother(fileNm, markedWindowsCombinedSMTFile);
                 }
+                smtbefore1 = new Date();
                 /****************Add timestamp-bound constraints*********************/
                 //adding lower and upper bound constraints
                 //if you reached end of input file parse last file in batch and get highest timestamps for upperbound
@@ -760,23 +860,32 @@ class UserHandler extends DefaultHandler
                     combinedBoundConstraintsStr = "(or " + combinedBoundConstraintsStr;//adding bounds for the current window/marked file
                     windowsProcessedInBatch++;
                 }
+                marked_smt_diff = ((new Date()).getTime() - smtbefore1.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+marked_smt_diff;
+                marked_smt_diff_withfilewrites = ((new Date()).getTime() - smtbefore.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                totalTimeMarkedWindowsFiltering=totalTimeMarkedWindowsFiltering+marked_smt_diff_withfilewrites;
                 //create/update/run file with updated constraints per window only if per-window-smt processing is required
                 if(TraceHLCTimestampingOfflineArithPredDet.perWindowSMTCheck) {
                     appendToFile(newFileNm, boundConstraintsStr + currentWindowConstraintStr);
                     //invoke solver on the new-constraints-file - if solver returned SAT then increment the snapshot counter
-                    System.out.println("Processing:"+newFileNm);
+                    ExecutionOutputContent=ExecutionOutputContent+"\nProcessing:"+newFileNm;
                     if(smt2FileCheck(newFileNm,smtOutputFile,"")){smtSnapshotsCount++;}
                 }
+                smtbefore = new Date();
+                smtbefore1 = new Date();
             } else{//if file in not strictly within current batch
                 markedFilesToProcessDuringNxtBatch.add(fileNm);
                 //if it is a border file then add it to batch-wise smt processing
                 if(windowEnd==currentBatchStrictEnd+sysathand.GetEpsilon()){//if yes - add file's content to marked-files-combined-file
+                    long marked_smt_diff = ((new Date()).getTime() - smtbefore1.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+                    totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+marked_smt_diff;
                     if(windowsProcessedInBatch==0){//if the marked file being processed is the first ever in the batch
                         appendToFile(markedWindowsCombinedSMTFile,commonConstraintsStr);//add common constraints - epsilon constraints, variable declaration, violation/predicate constraint
                     }
-                    System.out.println("Adding to all-marked-windows-combined-file:"+fileNm);
+                    ExecutionOutputContent=ExecutionOutputContent+"\nAdding to all-marked-windows-combined-file:"+fileNm;
                     //add all constraints(msg and interval constraints) from the current constraint file to all-marked-windows-in-batch-combined-file as well
                     appendContentFromOneFileToAnother(fileNm,markedWindowsCombinedSMTFile);
+                    smtbefore1 = new Date();
                     /****************Add timestamp-bound constraints*********************/
                     //if you reached end of input file parse last file in batch and get highest timestamps for upperbound
                     //invoke file parser to fetch highest timestamps in file - if no interval at some proc set window start as upper bound
@@ -824,19 +933,27 @@ class UserHandler extends DefaultHandler
             }
             String batchBndConstraintsStr=batchBndStr+closeBrack+"\n"+lowerBndStr;
             combinedBoundConstraintsStr=combinedBoundConstraintsStr+batchBndConstraintsStr;
+            long marked_smt_diff = ((new Date()).getTime() - smtbefore1.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+            totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+marked_smt_diff;
             //run solver on the single file that contains constraints from all marked windows in the batch
             appendToFile(markedWindowsCombinedSMTFile,combinedBoundConstraintsStr);
-            System.out.println("At the end of batch. Processing "+markedWindowsCombinedSMTFile);
+            ExecutionOutputContent=ExecutionOutputContent+"\nAt the end of batch. Processing "+markedWindowsCombinedSMTFile;
             String smtOutputFileForBatchBasedSolving=nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash+ "SMTResultsForBatchBasedSolving.txt";
             if(smt2FileCheck(markedWindowsCombinedSMTFile,smtOutputFileForBatchBasedSolving,csvLogFile) && !TraceHLCTimestampingOfflineArithPredDet.perWindowSMTCheck){smtSnapshotsCount++;}//record output in appropriate file
         } else {
+            long marked_smt_diff = ((new Date()).getTime() - smtbefore1.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+            totalTimeMarkedWindowsFilteringWithoutFileWriting=totalTimeMarkedWindowsFilteringWithoutFileWriting+marked_smt_diff;
             appendToFile(csvLogFile,"0,0,0,0,0,0,");//no marked windows in the batch means zero time taken for smt solving
         }
+        long marked_smt_diff = ((new Date()).getTime() - smtbefore.getTime());//most of the code after this is relevant to files for marked windows so updating allwindowstimers
+        totalTimeMarkedWindowsFiltering=totalTimeMarkedWindowsFiltering+marked_smt_diff;
         return smtSnapshotsCount;
     }
     /**Invoke solver on the current batch's smt file containing constraints of all windows in the batch
     --add upper and lower bound constraints, and constraints to restrict detection to current batch, and then invoke solver*/
     boolean processBatchSMTfile(boolean reachedEOF){/** invoking solver on a single file ( all windows combined) for the entire batch***/
+        Date allwind_smtbefore = new Date();//timing writing to all-windows-file
+        Date allwind_smtbefore1 = new Date();//timing writing to all-windows-file without timing file writes
         int currentBatchStrictEnd=lastProcessedBatchPt+TraceHLCTimestampingOfflineArithPredDet.batchlength;
         //constraint to find snapshot strictly within the batch
         String lowerBndStr="",closeBrack="",batchBndStr="(assert ";
@@ -857,15 +974,22 @@ class UserHandler extends DefaultHandler
         /******Updating single-combined-file for all windows/files******/
         String allConstraintsInBatchFile= nwfolder + TraceHLCTimestampingOfflineArithPredDet.backslash + "all_constraints_" + lastProcessedBatchPt + "to" +(currentBatchStrictEnd+sysathand.GetEpsilon())+ ".smt2";
         //add constraints to find snapshot strictly within the batch - i.e. at least one instant in the snapshot is within the batch
+        long all_smt_diff_withoutfilewrites = ((new Date()).getTime() - allwind_smtbefore1.getTime());
+        totalTimeAllWindowsSMTWithoutFileWriting=totalTimeAllWindowsSMTWithoutFileWriting + all_smt_diff_withoutfilewrites;
         appendToFile(allConstraintsInBatchFile,batchBndConstraintsStr);
+        allwind_smtbefore1 = new Date();
         /**add  upper bounds**/ //these were not required for marked-files-combined because we included the window-bound constraints of all marked-windows/files as it is
         //if you reached end of input file parse last file in batch and get highest timestamps for upperbound
         String perProcUpperBndStr="";
         for(int pr5=0; pr5 < sysathand.GetNumberOfProcesses(); pr5++) {
             perProcUpperBndStr = perProcUpperBndStr + "(assert (< l" + pr5 + " " + (Math.min(currentBatchStrictEnd+sysathand.GetEpsilon(),highestPtPerProc.elementAt(pr5))) + "))\n";
         }
+        all_smt_diff_withoutfilewrites = ((new Date()).getTime() - allwind_smtbefore1.getTime());
+        totalTimeAllWindowsSMTWithoutFileWriting=totalTimeAllWindowsSMTWithoutFileWriting + all_smt_diff_withoutfilewrites;
         appendToFile(allConstraintsInBatchFile,perProcUpperBndStr);
-        System.out.println("At the end of batch. Processing "+allConstraintsInBatchFile);
+        long all_smt_diff = ((new Date()).getTime() - allwind_smtbefore.getTime());
+        totalTimeAllWindowsSMT=totalTimeAllWindowsSMT + all_smt_diff;//updating only totalTimeAllWindowsSMT and not totalTimeAllWindowsSMTWithoutFileWriting because this part involves only file writing
+        ExecutionOutputContent=ExecutionOutputContent+"\nAt the end of batch. Processing "+allConstraintsInBatchFile;
         return smt2FileCheck(allConstraintsInBatchFile,smtOutputFileForBatchBasedSolving,csvLogFile);
     }
     //Function smt2FileCheck is from the below GITHUB repository
@@ -926,10 +1050,13 @@ class UserHandler extends DefaultHandler
     }
     List<String> getListOfFilesInLoc(String folderName, String endsWith){
         List<String> result= new ArrayList<>();
-        try {
-            result = Files.walk(Paths.get(folderName)).map(x -> x.toString()).filter(f -> f.endsWith(endsWith)).collect(Collectors.toList());
-        } catch (IOException e) {
-            e.printStackTrace();
+        File tmpDir = new File(folderName);
+        if(tmpDir.exists()) {
+            try {
+                result = Files.walk(Paths.get(folderName)).map(x -> x.toString()).filter(f -> f.endsWith(endsWith)).collect(Collectors.toList());
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
         return result;
     }
